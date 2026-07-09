@@ -648,6 +648,13 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
     audio_voice = FilerFileField(verbose_name=_("audio voice"), null=True, blank=True, on_delete=models.SET_NULL, related_name='actions_audio')
     prompt_voice = models.TextField(_("prompt voice"), null=True, blank=True)
     text = models.TextField(_("text"), null=True, blank=True)
+    # Lettering geometry for this panel: where the words go, not just what they are.
+    # The image model garbles long or exact text, so words are composited afterwards.
+    # Shape: {"elements": [{"type": "bubble"|"thought"|"caption"|..., "text": str,
+    #                       "box": [x, y, w, h], "tail": [x, y] | null}, ...]}
+    # Coordinates are FRACTIONS of the image (0..1), so a panel can be re-lettered at
+    # any resolution -- e.g. onto an upscaled plate for print -- without re-authoring.
+    lettering = models.JSONField(_("lettering"), null=True, blank=True)
     parameters = models.JSONField(_("configuration"), null=True, blank=True)
     shot_type = models.CharField(_("shot type"), max_length=20, choices=SHOT_TYPE_CHOICES, null=True, blank=True)
 
@@ -668,6 +675,7 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
             "media_type": "video" if self.video else "image",
             "audio_url": self.audio_voice.url if self.audio_voice else None,
             "text": self.text,
+            "lettering": self.lettering,
             "name": self.get_name()
         }
 

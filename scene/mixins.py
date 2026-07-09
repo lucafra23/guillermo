@@ -42,6 +42,10 @@ ACTION_FIELDSETS = (
             "classes": ["tab"],
             "fields": ["prompt_refine", "image_refine"],
         }),
+        ("Lettering", {
+            "classes": ["tab"],
+            "fields": ["text", "lettering"],
+        }),
         ("Execute On Save", {
             "classes": ["tab"],
             "fields": ["action"],
