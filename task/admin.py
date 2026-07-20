@@ -9,10 +9,11 @@ from .models import Task, TaskLog, TaskPreset
 @admin.register(Task)
 class TaskAdmin(ModelAdmin):
     list_display = (
-        'id', 'created', 'task_type', 'html_status', 
+        'id', 'created','owner', 'task_type', 'payload', 'html_status', 
         'last_logs', 'retries', 'view_logs_link'
     )
-    list_filter = ('task_type', 'status', 'created', 'modified')
+    list_filter = ('task_type', 'status', 'created', 'modified', 'owner', 'subject_ct', 'subject_id')
+    search_fields = ('id', 'owner__username', 'task_type', 'status')
     readonly_fields = ('retry_attempts',)
     actions = [
         'reprocess'

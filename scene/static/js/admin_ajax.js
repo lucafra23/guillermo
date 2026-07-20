@@ -16,10 +16,24 @@ const getAdminBaseUrl = (modelLabel = null) => {
     return window.location.pathname.split('/').slice(0, 4).join('/');
 };
 
+const setChatFormState = (objectId, disabled) => {
+    const formContainer = document.querySelector(`.chat-form[data-object-id="${objectId}"]`);
+    if (!formContainer) return;
+
+    const input = formContainer.querySelector('textarea[name="chat_input"]');
+    const actionSelect = formContainer.querySelector('select[name="action"]');
+    const submitBtn = formContainer.querySelector('.chat-submit-btn');
+
+    if (input) input.disabled = disabled;
+    if (actionSelect) actionSelect.disabled = disabled;
+    if (submitBtn) submitBtn.disabled = disabled;
+    formContainer.style.opacity = disabled ? '0.7' : '1';
+};
+
 const updateRowState = (row, status) => {
         if (!row) return;
         // Define which statuses lock the row
-        const isLocked = ["0", "1"].includes(status);
+        const isLocked = ["0", "1", "5", "6"].includes(status); // 0: Started, 1: Pending, 5: Scheduled, 6: Retry
         // Find all inputs in the row except the dropdown itself
         const inputs = row.querySelectorAll('input, textarea, select:not(.inline-block select)');
         const saveBtn = row.querySelector('.ajax-save-btn');
@@ -105,6 +119,7 @@ const pollStatus = () => {
                     if (row) {
                         updateRowState(row, String(data.status));
                     }
+                    setChatFormState(objectId, ["0", "1"].includes(String(data.status)));
                 })
                 .catch(err => {
                     console.error(`[AdminAjax] Fetch error for object ID ${objectId} at ${url}:`, err);
@@ -464,40 +479,6 @@ const addInputHints = () => {
     });
 };
 
-/**
- * Refreshes a specific collapsible section (Characters, Props, Renders, etc.)
- */
-window.refreshSection = (objectId, sectionKey) => {
-    console.log(`[AdminAjax] Refreshing section: ${sectionKey} for object ID: ${objectId}`);
-    const container = document.getElementById(`section-content-${sectionKey}-${objectId}`); 
-    if (!container) {
-        console.warn(`[AdminAjax] Container not found for section: ${sectionKey} (ID: ${objectId})`);
-        return;
-    }
-    const oldContent = container.innerHTML 
-    container.classList.add('opacity-40', 'pointer-events-none');
-    container.innerHTML = `<div class="flex justify-center items-center h-full"><span class="material-symbols-outlined animate-spin text-4xl">autorenew</span></div>`;
-    // Construct URL based on current admin path (works for /admin/scene/story/ or /admin/scene/scene/)
-    const baseUrl = window.location.pathname.split('/').slice(0, 4).join('/');
-    const url = `${baseUrl}/refresh-section/${objectId}/${sectionKey}/`;
-
-    fetch(url)
-        .then(response => response.json())
-        .then(data => {
-            if (data.html) {
-                container.innerHTML = data.html;
-            }
-        })
-        .catch(error => {
-            console.error(`[AdminAjax] Error refreshing section ${sectionKey}:`, error)
-            container.innerHTML = oldContent; // Restore old content on error
-        })
-        .finally(() => {
-            container.classList.remove('opacity-40', 'pointer-events-none');
-            
-        });
-};
-
 // Fetch configuration from the server
 const fetchConfig = () => {
     return fetch(`${getAdminBaseUrl()}/ajax-config/`)
@@ -561,6 +542,7 @@ const initTaskMonitoring = () => {
         if (["0", "1"].includes(status)) {
             const objectId = el.id.replace('task-', '');
             monitoredObjectIds.add(objectId);
+            setChatFormState(objectId, true); // Disable chat form if task is active
             updateRowState(row, status);
         }
     });
@@ -570,6 +552,102 @@ const initTaskMonitoring = () => {
     fetchConfig();
     scrollToIdFromHash();
 };
+
+document.addEventListener('click', function(e) {
+    // This function now handles both chat submissions and section refreshes.
+    // It's designed to be extensible for other AJAX-triggered section updates.
+
+    // --- Chat Submission Logic ---
+    const submitBtn = e.target.closest('.chat-submit-btn');
+    if (!submitBtn) return;
+
+    
+    console.log("[AdminAjax] Chat submit button clicked:", submitBtn);
+    e.preventDefault();
+
+    
+    const formContainer = submitBtn.closest('.chat-form');
+    if (formContainer) {
+        const objectId = formContainer.dataset.objectId;
+        const input = formContainer.querySelector('textarea[name="chat_input"]');
+        const actionSelect = formContainer.querySelector('select[name="action"]');
+        const messagesContainer = document.getElementById(`chat-messages-${objectId}`);
+        const url = getAdminBaseUrl() + "/" + formContainer.dataset.url;
+        const token = formContainer.querySelector('[name=csrfmiddlewaretoken]').value;
+        console.log(`[AdminAjax] Preparing to send chat input for object ID: ${objectId} | URL: ${url} | Input: ${input.value} | Token: ${token}`);
+        
+        // Manually construct FormData since we are not in a <form> element
+        const formData = new FormData();
+        formData.append('chat_input', input.value);
+        if (actionSelect) {
+            formData.append('action', actionSelect.value);
+        }
+        const originalInputValue = input.value;
+
+        // Disable form and show loading state
+        setChatFormState(objectId, true);
+        
+        // Append a temporary user message for immediate feedback
+        const tempUserMessage = `
+            <div class="flex items-start gap-3 justify-end">
+                <div class="bg-primary-100 dark:bg-primary-900/50 text-primary-800 dark:text-primary-200 rounded-lg p-3 max-w-lg opacity-60">
+                    <p class="text-sm">${originalInputValue}</p>
+                </div>
+            </div>`;
+        messagesContainer.insertAdjacentHTML('beforeend', tempUserMessage);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+        fetch(url, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-CSRFToken': token
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Update the chat content with the server-rendered HTML
+            messagesContainer.innerHTML = data.html;
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            input.value = ''; // Clear input on success
+
+            // If a task was created, start polling for the main object
+            if (data.status === 'task_created' && ["0", "1"].includes(String(data.task_status))) {
+                console.log(`[AdminAjax] Task created from chat for object ID ${objectId}. Starting polling.`);
+                monitoredObjectIds.add(objectId);
+                // The form is already disabled by setChatFormState, now we just need to start polling.
+                startPolling();
+            }
+        })
+        .finally(() => {
+            // Re-enable the form only if no task is actively running
+            if (!monitoredObjectIds.has(objectId)) {
+                setChatFormState(objectId, false);
+            }
+            input.focus();
+        });
+    }
+});
+
+// Handle "Read more" / "Read less" in chat messages without AlpineJS
+document.addEventListener('click', function(e) {
+    const toggleBtn = e.target.closest('.toggle-text-button');
+    if (!toggleBtn) return;
+
+    e.preventDefault();
+    e.stopPropagation(); // Crucial: Prevent click from bubbling up to the row
+
+    const container = toggleBtn.closest('.expandable-text');
+    if (!container) return;
+
+    const summary = container.querySelector('.summary-text');
+    const full = container.querySelector('.full-text');
+
+    if (summary && full) {
+        summary.style.display = summary.style.display === 'none' ? '' : 'none';
+        full.style.display = full.style.display === 'none' ? '' : 'none';
+    }
+});
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initTaskMonitoring);

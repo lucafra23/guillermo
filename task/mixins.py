@@ -13,8 +13,11 @@ class AfterSaveActionMixin:
         super().save_model(request, obj, form, change)
         
         if action:
-            Task.createTaskIfQueueEnabled(
-                subject=obj,
-                task_type=action,
-                owner=request.user
-            )
+            if hasattr(obj, 'task_from_action'):
+                obj.task_from_action(action, request.user)
+            else:    
+                Task.createTaskIfQueueEnabled(
+                    subject=obj,
+                    task_type=action,
+                    owner=request.user
+                )

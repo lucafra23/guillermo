@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from .models import Scene, Action, Character, Prop, Background, Voice
 from typing import List, Optional
 
 
@@ -13,6 +12,10 @@ class VoiceSchema(BaseModel):
     name: str
     prompt: str
     google_voice: Optional[str] = None
+
+class GoogleVoiceSchema(BaseModel):
+    name: str
+    description: str
 
 class CharacterSchema(BaseModel):
     name: str
@@ -41,6 +44,13 @@ class ActionSchema(BaseModel):
     shot_type: Optional[str] = None
 
 
+class StoryElementsSchema(BaseModel):
+    locations: List[BackgroundSchema]
+    characters: List[CharacterSchema]
+    props: List[PropSchema]
+    voices: List[VoiceSchema]
+    google_voices: List[GoogleVoiceSchema]
+
 class SceneSchema(BaseModel):
     name: str
     locations: List[BackgroundSchema]
@@ -55,7 +65,6 @@ class SceneSchema(BaseModel):
         Assumes source provides get_story() and get_scene().
         """
         story = scene.story
-        
         scene.name = self.name
         scene.save()
 
@@ -63,6 +72,8 @@ class SceneSchema(BaseModel):
         voice_map = {}
         if self.voices:
             from agent.models import GoogleVoice
+            from .models import Scene, Action, Character, Prop, Background, Voice
+
             for voice_data in self.voices:
                 gv = GoogleVoice.objects.filter(name=voice_data.google_voice).first() if voice_data.google_voice else None
                 item = Voice.objects.update_or_create(

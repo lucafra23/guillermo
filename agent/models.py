@@ -4,7 +4,6 @@ from google import genai
 import random
 import os
 import time
-import instructor
 from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.utils.module_loading import import_string
@@ -59,32 +58,14 @@ class GetContentsMixin:
             object_id=self.pk
         ).order_by('created_at')
 
-    def get_contents(self, generate_self=True, preset=None):
+    def get_contents(self, generate_self=True, preset=None,):
          # remove generate self and add preset regenerate_image
         parts = [self.context_text(generate_self=generate_self, preset=preset)]
         if not generate_self or preset in [self.PRESET_REFINE, self.PRESET_COMIC]:
             if hasattr(self, 'image') and self.image:
-                parts.append(self.get_thumbnail(preset=preset))
+                parts.append(self.image)
         return [p for p in parts if p is not None and (not isinstance(p, str) or p.strip() != "")]
-    
-    def get_thumbnail(self, preset=None):
-        if self.image:
-            # half the size to make it cheaper
-            try:
-                thumbnail = get_thumbnailer(self.image.file).get_thumbnail({'size': (0, self.image.height/2)})
-                return Image.open(thumbnail.path)
-            except Exception as e:
-                print(f"Error occurred while generating thumbnail: {e}")
-        return None
 
-    def generate_text(self, agent=None, user=None):
-        if agent is None:
-            agent = self.get_agent(Agent.OUTPUT_TYPE_TEXT)
-        out = agent.generate(self, preset=self.PRESET_REFINE_PROMPT, user=user, target_field="prompt")
-        if out is not None:
-            self.prompt = out
-            self.save()
-        return out
 
     def get_agent(self, output_type):
         agent = Agent.objects.filter(output_type=output_type).first()
@@ -141,6 +122,15 @@ class GetContentsMixin:
         out = image_agent.generate(self, preset=self.PRESET_REFINE, user=user, target_field="image")
         if save and out:
             self.image = out
+            self.save()
+        return out
+    
+    def generate_text(self, preset=PRESET_REFINE_PROMPT, message=None,  target_field="prompt",  agent=None, user=None):
+        if agent is None:
+            agent = self.get_agent(Agent.OUTPUT_TYPE_TEXT)
+        out = agent.generate(self, preset=preset, message_part=message, user=user, target_field=target_field)
+        if out is not None:
+            setattr(self, target_field, out)
             self.save()
         return out
     
@@ -250,7 +240,10 @@ class Agent(models.Model):
     def get_genai_client(self, user):
         if user and hasattr(user, 'agent_profile') and user.agent_profile.google_api_key:
             from google.genai import types
-            google_api_key = user.agent_profile.google_api_key
+            if AgentApiKey.objects.filter(agent=self, profile=user.agent_profile).exists():
+                google_api_key = AgentApiKey.objects.get(agent=self, profile=user.agent_profile).api_key
+            else:
+                google_api_key = user.agent_profile.google_api_key
             if google_api_key.enterprise:
                 return genai.Client(api_key=google_api_key.api_key, vertexai=True, http_options=types.HttpOptions(timeout=settings.GENAI_REQUEST_TIMEOUT_MS))                
             else:
@@ -293,13 +286,13 @@ class Agent(models.Model):
                 return f"Response blocked. Finish reason: {response.candidates[0].finish_reason}"
             return "No text was generated."
 
-    def generate_voice(self, preset, prompt_obj, user=None):
+    def generate_voice(self, preset, prompt_obj, message=None, contents=None, user=None):
         # Check for errors if voice is not generated
         from google.genai import types
-
+        if not contents:
+            contents = prompt_obj.get_contents(generate_self=True, preset=preset)
         out = None
         client = self.get_genai_client(user)
-        contents = prompt_obj.get_contents(generate_self=True, preset=preset)
         response = client.models.generate_content(
             model=self.agent_model.name,
             contents=contents['prompt'],
@@ -331,8 +324,45 @@ class Agent(models.Model):
         )
         return out
     
-    def generate_image_omni_video(self, preset, prompt_obj, user=None):
-        contents = prompt_obj.get_contents(generate_self=True, preset=preset)
+    def generate_text(self, preset, prompt_obj, message=None, user=None, contents=None):
+        from google.genai import types
+        instructions = self.get_instructions(user=user, preset=preset, obj=prompt_obj)
+        message.set_instructions(instructions)
+        config = types.GenerateContentConfig(
+            system_instruction=self.get_instructions(user=user, preset=preset, obj=prompt_obj),
+        )
+        with self.get_genai_client(user) as client:
+            response = client.models.generate_content(
+                model=self.agent_model.name,
+                contents=contents,
+                config=config
+            )
+            self.save_usage(user, response, obj=prompt_obj, preset=preset)
+            out = self.extract_text(response, prompt_obj)
+        return out
+
+    def generate_image(self, preset, prompt_obj, message=None, user=None, contents=None):
+        from google.genai import types
+        instructions = self.get_instructions(user=user, preset=preset, obj=prompt_obj)
+        message.set_instructions(instructions)
+        contents.extend(instructions)
+        config = types.GenerateContentConfig(
+            image_config=types.ImageConfig(
+                aspect_ratio="9:16",
+            )
+        )
+        with self.get_genai_client(user) as client:
+            response = client.models.generate_content(
+                model=self.agent_model.name,
+                contents=contents,
+                config=config
+            )
+            self.save_usage(user, response, obj=prompt_obj, preset=preset)
+            out = self.save_image(response, prompt_obj)
+        return out
+    
+
+    def generate_image_omni_video(self, preset, prompt_obj,message=None, user=None, contents=None):
         with self.get_genai_client(user) as client:
             interaction = client.interactions.create(
                 model="gemini-omni-flash-preview",
@@ -442,39 +472,19 @@ class Agent(models.Model):
             instructions += Prompt.instructions(preset, obj)
         return [i for i in instructions if i and str(i).strip() != ""]
     
-    def generate(self, obj, preset=None, user=None, target_field=None):
+    def generate_structured(self, preset, prompt_obj, message=None, user=None, contents=None):
         from google.genai import types
-        config = None
-        out = None
-
-        if self.output_type == self.OUTPUT_TYPE_IMAGE_OMNI_VIDEO:
-            return self.generate_image_omni_video(preset, obj, user=user)
-        if self.output_type == self.OUTPUT_TYPE_VIDEO:
-            return self.generate_video(preset, obj, user=user)
-        if self.output_type == self.OUTPUT_TYPE_VOICE:
-            return self.generate_voice(preset, obj, user=user)
-
-        contents = obj.get_contents(generate_self=True, preset=preset)
-        if self.output_type == self.OUTPUT_TYPE_STRUCTURED:
-            schema_class = self.get_schema_class()
-            config = types.GenerateContentConfig(
-                system_instruction=self.get_instructions(user=user, preset=preset, obj=obj),
-                response_mime_type="application/json" if schema_class else None,
-                response_schema=schema_class,
-                temperature=0.1,
-            )
-        elif self.output_type == self.OUTPUT_TYPE_IMAGE:
-            instructions = self.get_instructions(user=user, preset=preset, obj=obj)
-            contents.extend(instructions)
-            config = types.GenerateContentConfig(
-                image_config=types.ImageConfig(
-                    aspect_ratio="9:16",
-                )
-            )
-        elif self.output_type == self.OUTPUT_TYPE_TEXT:
-            config = types.GenerateContentConfig(
-                system_instruction=self.get_instructions(user=user, preset=preset, obj=obj)
-            )
+        schema_class = self.get_schema_class()
+        if not schema_class:
+            return None
+        instructions = self.get_instructions(user=user, preset=preset, obj=prompt_obj)
+        message.set_instructions(instructions)
+        config = types.GenerateContentConfig(
+            system_instruction=instructions,
+            response_mime_type="application/json",
+            response_schema=schema_class,
+            temperature=0.1,
+        )
 
         with self.get_genai_client(user) as client:
             response = client.models.generate_content(
@@ -482,18 +492,39 @@ class Agent(models.Model):
                 contents=contents,
                 config=config
             )
-            self.save_usage(user, response, obj=obj, preset=preset)
-            if self.output_type == self.OUTPUT_TYPE_TEXT:
-                out = self.extract_text(response, obj)
-            elif self.output_type == self.OUTPUT_TYPE_IMAGE:
-                out = self.save_image(response, obj)
-            elif self.output_type == self.OUTPUT_TYPE_STRUCTURED:
-                schema_class = self.get_schema_class()
-                if schema_class:
-                    data = schema_class.model_validate_json(response.text)
-                    out = data.sync_model(obj) if hasattr(data, "sync_model") else data
-
+            self.save_usage(user, response, obj=prompt_obj, preset=preset)
+            data = schema_class.model_validate_json(response.text)
+            out = data.sync_model(prompt_obj) if hasattr(data, "sync_model") else data
         return out
+
+    def generate(self, obj, preset=None, user=None, target_field=None, message_part=None):
+        parts = obj.get_contents(generate_self=True, preset=preset)
+        if message_part:
+            parts.append(message_part)
+        message = Message.create_message(
+            obj,
+            agent=self,
+            user=user,
+            target_field=target_field,
+        )
+        message.set_input(parts)
+        contents = Message.to_google_types(parts)
+        out = None
+        if self.output_type == self.OUTPUT_TYPE_IMAGE_OMNI_VIDEO:
+            out = self.generate_image_omni_video(preset, obj,message=message, user=user, contents=contents)
+        elif self.output_type == self.OUTPUT_TYPE_VIDEO:
+            out = self.generate_video(preset, obj, message=message, user=user, contents=contents)
+        elif self.output_type == self.OUTPUT_TYPE_VOICE:
+            out = self.generate_voice(preset, obj, message=message, user=user, contents=contents)
+        elif self.output_type == self.OUTPUT_TYPE_IMAGE:
+            out = self.generate_image(preset, obj, message=message, user=user, contents=contents)
+        elif self.output_type == self.OUTPUT_TYPE_TEXT:
+            out = self.generate_text(preset, obj, message=message, user=user, contents=contents)
+        elif self.output_type == self.OUTPUT_TYPE_STRUCTURED:
+            out = self.generate_structured(preset, obj, message=message, user=user, contents=contents)
+        message.set_output(out)
+        return out
+
 
 
 class TokenUsage(models.Model):
@@ -519,6 +550,11 @@ class GoogleApiKey(models.Model):
     def __str__(self):
         return "{}-{}".format(self.name, self.user.username)
 
+class AgentApiKey(models.Model):
+    agent = models.ForeignKey(Agent, verbose_name=_("agent"), related_name='api_keys', on_delete=models.CASCADE)
+    api_key = models.ForeignKey(GoogleApiKey, verbose_name=_("agent"), related_name='api_keys', on_delete=models.CASCADE)
+    profile = models.ForeignKey('AgentProfile', verbose_name=_("profile"), related_name='api_keys', on_delete=models.CASCADE, null=True, blank=True)
+
 class AgentProfile(models.Model):
 
     user = models.OneToOneField(settings.AUTH_USER_MODEL, verbose_name=_("user"), related_name='agent_profile', on_delete=models.CASCADE)
@@ -536,28 +572,134 @@ class Message(models.Model):
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField()
     content_object = GenericForeignKey('content_type', 'object_id')
-    
     agent = models.ForeignKey(Agent, verbose_name=_("agent"), on_delete=models.SET_NULL, null=True, blank=True, related_name='chat_history')
     user = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name=_("user"), on_delete=models.SET_NULL, null=True, blank=True, related_name='agent_messages')
-    input_data = models.JSONField(_("input data"), blank=True, default=list)
-    output_text = models.TextField(_("output text"), blank=True)
-    output_image = FilerImageField(verbose_name=_("output image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='message_images')
-    output_file = FilerFileField(verbose_name=_("output file"), null=True, blank=True, on_delete=models.SET_NULL, related_name='message_files')
     target_field = models.CharField(_("target field"), max_length=100, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-
+    
     class Meta:
         ordering = ['-created_at']
 
-    def create_message(cls, content_object, agent=None, user=None, input_data=None, output_text="", output_image=None, output_file=None, target_field=""):
+    def parts_input(self):
+        return self.parts.filter(part_type=MessagePart.PART_TYPE_INPUT).order_by('order')
+
+    def parts_output(self):
+        return self.parts.filter(part_type=MessagePart.PART_TYPE_OUTPUT).order_by('order')
+
+    def parts_instructions(self):
+        return self.parts.filter(part_type=MessagePart.PART_TYPE_INSTRUCTIONS).order_by('order')
+
+    @classmethod
+    def create_message(cls, content_object, agent=None, user=None, target_field=""):
         message = cls.objects.create(
             content_object=content_object,
             agent=agent,
             user=user,
-            input_data=input_data or [],
-            output_text=output_text,
-            output_image=output_image,
-            output_file=output_file,
             target_field=target_field
         )
-        return message
+        return message#
+    
+    @classmethod
+    def to_google_types(cls, parts):
+        """
+        Convert a list of parts (str, FilerImage, PIL Image) into a list
+        of google.genai.types.Part compatible objects.
+        """
+        if isinstance(parts, dict):
+            out = {}
+            for key, part in parts.items():
+                if isinstance(part, str):
+                    out[key] = part
+                elif isinstance(part, FilerImage):
+                    out[key] = Image.open(part.file.path)
+                elif isinstance(part, Image.Image):
+                    out[key] = part
+        elif isinstance(parts, list):
+            out = []
+            for part in parts:
+                if isinstance(part, str):
+                    out.append(part)
+                elif isinstance(part, FilerImage):
+                    out.append(Image.open(part.file.path))
+                elif isinstance(part, Image.Image):
+                    out.append(part)
+        return out
+
+    def _create_part(self, part_data, order, part_type, key=None):
+        """Helper method to create a single MessagePart."""
+        part_kwargs = {
+            'message': self,
+            'order': order,
+            'part_type': part_type,
+            'key': key
+        }
+        if isinstance(part_data, str):
+            part_kwargs['text'] = part_data
+        elif isinstance(part_data, FilerImage):
+            part_kwargs['image'] = part_data
+        elif isinstance(part_data, Image.Image):
+            raise ValueError("PIL Image objects are not supported directly. Please save the image to a FilerImage first.")
+        elif isinstance(part_data, dict):
+            part_kwargs['json'] = part_data
+        else:
+            # Skip creating a part if the data type is not supported
+            return
+
+        MessagePart.objects.create(**part_kwargs)
+
+    def _create_parts_from_list(self, parts_list, part_type):
+        """Creates MessagePart objects from a list of data."""
+        for i, part in enumerate(parts_list):
+            self._create_part(part, order=i, part_type=part_type)
+
+    def _create_parts_from_dict(self, parts_dict, part_type):
+        """Creates MessagePart objects from a dictionary of data."""
+        for i, (key, value) in enumerate(parts_dict.items()):
+            self._create_part(value, order=i, part_type=part_type, key=key)
+
+    def set_input(self, parts_data):
+        """Creates input MessagePart objects from a list of data."""
+        if isinstance(parts_data, dict):
+            self._create_parts_from_dict(parts_data, MessagePart.PART_TYPE_INPUT)
+        elif isinstance(parts_data, list):
+            self._create_parts_from_list(parts_data, MessagePart.PART_TYPE_INPUT)
+
+    def set_instructions(self, instructions_data):
+        """Creates instruction MessagePart objects from a list of strings."""
+        if isinstance(instructions_data, list):
+            for i, instruction_text in enumerate(instructions_data):
+                if isinstance(instruction_text, str):
+                    MessagePart.objects.create(
+                        message=self, part_type=MessagePart.PART_TYPE_INSTRUCTIONS, text=instruction_text, order=i
+                    )
+
+    def set_output(self, output_data):
+        """Creates a single output MessagePart from the generation result."""
+        if output_data is None:
+            return
+
+        self._create_part(output_data, order=999, part_type=MessagePart.PART_TYPE_OUTPUT)
+
+class MessagePart(models.Model):
+    PART_TYPE_INPUT = 'input'
+    PART_TYPE_OUTPUT = 'output'
+    PART_TYPE_INSTRUCTIONS = 'instructions'
+    
+    PART_TYPE_CHOICES = [
+        (PART_TYPE_INPUT, _('Input')),
+        (PART_TYPE_OUTPUT, _('Output')),
+        (PART_TYPE_INSTRUCTIONS, _('Instructions')),
+    ]
+
+    message = models.ForeignKey(Message, related_name='parts', on_delete=models.CASCADE)
+    part_type = models.CharField(_("part type"), max_length=31, choices=PART_TYPE_CHOICES, default=PART_TYPE_INPUT)
+    text = models.TextField(_("text"), blank=True, null=True)
+    json = models.JSONField(_("json data"), blank=True, null=True)
+    file = FilerFileField(verbose_name=_("file"), null=True, blank=True, on_delete=models.SET_NULL, related_name='message_parts_file')
+    image = FilerImageField(verbose_name=_("image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='message_parts_image')
+    order = models.PositiveIntegerField(_("order"), default=0)
+    key = models.CharField(_("key"), max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+
+    class Meta:
+        ordering = ['order']

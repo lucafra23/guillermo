@@ -1,20 +1,48 @@
 {% load i18n %}
-<div class="flex flex-col {% if card_included == 1 %}-m-6{% else %}bg-white lg:border lg:border-base-200 lg:rounded-default lg:shadow-xs lg:dark:border-base-800 dark:bg-base-900 overflow-hidden mb-6{% endif %}"
-     id="scene-renders-{{ instance.id }}"
-     data-refresh-url="{% url 'admin:scene_refresh_section' instance.id 'renders' %}">
-    <div class="px-4 py-3 border-b border-base-200 dark:border-base-800 flex justify-between items-center bg-base-50/50 dark:bg-white/[.01]">
-        <h2 class="font-semibold text-font-important-light text-sm dark:text-font-important-dark">
-            {% trans "Renders & Videos" %}
-        </h2>
-        <button type="button" 
-                onclick="refreshSection('{{ instance.id }}', 'renders')"
-                class="cursor-pointer inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-600 hover:text-primary-500 dark:text-primary-400 transition-colors group">
-            <span class="material-symbols-outlined text-[16px] group-hover:rotate-180 transition-transform duration-500">refresh</span>
-            {% trans "Refresh" %}
-        </button>
+<div
+    id="section-{{ section_key }}"
+    class="relative w-full bg-white rounded-lg shadow-sm dark:bg-gray-900 border border-gray-200 dark:border-gray-800"
+    x-data="{
+        isLoaded: {{ is_loaded|yesno:'true,false' }},
+        isLoading: false,
+        isCollapsed: {{ collapsible|yesno:'true,false' }},
+        loadSection() {
+            if (this.isLoaded || this.isLoading) return;
+            this.isLoading = true;
+            const url = `{{ request.path }}refresh-section/{{ section_key }}/{{ content_type_id }}/{{ instance.pk }}/`;
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    this.$refs.content.innerHTML = data.html;
+                    this.isLoaded = true;
+                })
+                .catch(error => console.error('Error loading renders section:', error))
+                .finally(() => this.isLoading = false);
+        }
+    }"
+    x-init="if (!isCollapsed) { loadSection(); }"
+>
+    <div
+        class="flex items-center justify-between w-full px-4 py-3"
+    >
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ title }}</h3>
+        <div class="flex items-center gap-x-2">
+            <button type="button" 
+                    @click.stop="isLoaded = false; loadSection()"
+                    class="cursor-pointer inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-600 hover:text-primary-500 dark:text-primary-400 transition-colors group">
+                <span class="material-symbols-outlined text-[16px] group-hover:rotate-180 transition-transform duration-500">refresh</span>
+            </button>
+            <button @click="isCollapsed = !isCollapsed; if (!isCollapsed) loadSection();" type="button" class="flex items-center justify-center w-8 h-8 text-gray-400 transition-colors rounded-full hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-300">
+                <span class="material-symbols-outlined" x-text="isCollapsed ? 'expand_more' : 'expand_less'"></span>
+            </button>
+        </div>
     </div>
 
-    <div class="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" id="section-content-renders-{{ instance.id }}">
-        {% include "sections/scene_renders_items.html" with renders=renders %}
+    <div x-show="!isCollapsed" class="border-t border-gray-200 dark:border-gray-800" style="display: none;">
+        <div x-ref="content" class="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div x-show="isLoading" class="flex items-center justify-center p-6 col-span-full">
+                <span class="material-symbols-outlined text-4xl animate-spin text-primary-500">progress_activity</span>
+            </div>
+        </div>
     </div>
 </div>

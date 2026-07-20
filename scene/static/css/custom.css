@@ -16,7 +16,8 @@
 .data-row .field-sample_text,
 .data-row .field-prompt_video,
 .data-row .field-prompt_comic,
-.data-row .field-video_player
+.data-row .field-video_player,
+.data-row .field-last_logs
 {
     height: fit-content;
     flex-direction: column;
@@ -368,4 +369,37 @@ video {
     padding: 0.25rem 0.625rem;
     font-size: 0.75rem;
     font-weight: 600;
+}
+
+/* Section Header Styling */
+.section-title {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 500 !important;
+    font-size: 1.125rem !important; /* text-lg */
+    letter-spacing: -0.01em;
+    padding-bottom: 0.5rem; /* pb-2 */
+    margin-bottom: 1rem; /* mb-4 */
+    border-bottom: 1px solid;
+    border-color: var(--color-base-200) !important;
+    color: var(--color-base-800) !important;
+}
+
+.dark .section-title {
+    border-color: var(--color-base-800) !important;
+    color: var(--color-base-100) !important;
+}
+
+/* Adjustments for collapsible section titles */
+.section-title button {
+    font-weight: 500 !important;
+    font-size: 1.125rem !important;
+    color: var(--color-base-800) !important;
+}
+.dark .section-title button {
+    color: var(--color-base-100) !important;
+}
+
+/* Chat Image Styling */
+.chat-image-container {
+    max-height: 400px;
 }

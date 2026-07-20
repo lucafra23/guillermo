@@ -67,7 +67,7 @@ class TaskGenerateComic:
         self.task = task
     def process(self):
         item = self.task.subject
-        item.image_comic = item.generate_comic(user=self.task.owner)
+        item.image_comic = item.generate_comic(user=self.task.owner, target_field="image_comic")
         item.save()
 
 class TaskExtractScene:
@@ -81,18 +81,22 @@ class TaskExtractScene:
 class TaskGenerateText:
     def __init__(self, task):
         self.task = task
+
     def process(self):
         item = self.task.subject
         agent = self.task.thr
-        if hasattr(item, 'generate_text'):
-            item.generate_text(agent=agent, user=self.task.owner)
-        elif self.task.payload and 'target_field' in self.task.payload:
-            out = agent.generate(self, preset=GetContentsMixin.PRESET_TEXT, user=self.task.owner, target_field=self.task.payload['target_field'])
-            setattr(self, self.task.payload['target_field'], out)
-            self.save()
-        else:
-            raise ValueError("TaskGenerateText requires 'target_field' in task payload or custom generate text method on the model.")
-
+        payload = self.task.payload or {}
+        preset = payload.get('preset', GetContentsMixin.PRESET_REFINE_PROMPT)
+        message = payload.get('message', None)
+        target_field = payload.get('target_field', "prompt")
+        item.generate_text(
+            agent=agent, 
+            preset=preset, 
+            message=message, 
+            user=self.task.owner, 
+            target_field=target_field
+        )
+        
 
 class TaskGenerateScene:
     """
@@ -104,6 +108,7 @@ class TaskGenerateScene:
         item = self.task.subject
         item.generate_scene(user=self.task.owner)
         item.save()
+
 
 class TaskGenerateElements:
     """
@@ -216,3 +221,41 @@ class TaskGenerateShots:
         for a_task in action_tasks:
             timestamp = timestamp + timedelta(minutes=minute_offset)
             a_task.process(timestamp=timestamp)
+
+class TaskGenerateVoices:
+    """
+    Iterates through all voices associated with a scene (via characters and actions)
+    and queues a generation task for any that are missing their audio sample.
+    """
+    def __init__(self, task):
+        self.task = task
+
+    def process(self):
+        scene = self.task.subject
+        voices = set()
+
+        for action in scene.actions.all():
+           if action.prompt_voice and action.voice and not action.voice.audio_voice:
+                self.task.log(f"Queueing voice generation for {action.name}")
+                Task.createTaskIfQueueEnabled(
+                    subject=action,
+                    task_type=settings.TASK_TYPE_GENERATE_VOICE,
+                    thr=scene,
+                    owner=self.task.owner
+                )
+
+class TaskGenerateComic:
+    def __init__(self, task):
+        self.task = task
+
+    def process(self):
+        scene = self.task.subject
+        for action in scene.actions.all():
+           if action.prompt_comic and not action.image_comic:
+                self.task.log(f"Queueing comic generation for {action.name}")
+                Task.createTaskIfQueueEnabled(
+                    subject=action,
+                    task_type=settings.TASK_TYPE_GENERATE_COMIC,
+                    thr=scene,
+                    owner=self.task.owner
+                )

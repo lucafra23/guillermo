@@ -18,3 +18,5 @@ djangorestframework
 redis
 django-import-export
 django-celery-beat
+django-crispy-forms
+audiostretchy[all]

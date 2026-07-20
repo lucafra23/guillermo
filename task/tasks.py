@@ -29,6 +29,10 @@ def process_task(task_id):
             delegate.process()
             if task.status == Task.TASK_STATUS_STARTED:
                 task.set_status(Task.TASK_STATUS_SUCCESS)
+                for next_task in task.next_tasks.all():
+                    if next_task.is_processable() and not next_task.has_pending_previous():
+                        process_task.delay(next_task.id)
+
         except SoftTimeLimitExceeded as e:
             task.log(
                 f"Task timed out after {settings.CELERY_TASK_SOFT_TIME_LIMIT} seconds.\n"
@@ -46,11 +50,9 @@ def process_task(task_id):
                 task.retry_attempts += 1
                 task.retry_countdown += task.retry_countdown + random.randint(0, 5) 
                 task.save(update_fields=['retry_attempts', 'retry_countdown'])
+                task.set_status(Task.TASK_STATUS_RETRY)
                 task.process(countdown=task.retry_countdown)
-                return # Stop further processing for this run
+            return # Stop further processing for this run
             
 
-        for next_task in task.next_tasks.all():
-            if next_task.is_processable() \
-                and not next_task.has_pending_previous():
-                process_task.delay(next_task.id)
+        

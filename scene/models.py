@@ -6,9 +6,12 @@ from agent.models import GetContentsMixin, GoogleVoice
 from scene.mixins import (
     EmailSenderMixin, UserCreatorMixin, ModelDisplayMixin, RenderTypeMixin
 )
+from .schemas import StoryElementsSchema, BackgroundSchema, CharacterSchema, PropSchema, VoiceSchema, GoogleVoiceSchema
+
 from task.mixins import  AfterSaveActionMixin
 from task.models import TaskHolder, Task
-
+import yaml
+from .schemas import ActionSchema
 from django.utils.translation import gettext_lazy as _
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
@@ -50,7 +53,10 @@ class Style(models.Model, GetContentsMixin, ModelDisplayMixin):
             return self.prompt_refine
         return self.prompt
 
-
+class Preset(models.Model):
+    name = models.CharField(_("name"), null=True, blank=True)
+    preset = models.JsonField(_("preset"), null=True, blank=True)
+    
 
 class Author(models.Model, UserCreatorMixin):
     story = models.ForeignKey('scene.Story', verbose_name=_("story"), related_name='authors', on_delete=models.CASCADE, null=True, blank=True)
@@ -105,6 +111,7 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
         default=getattr(settings, 'DEFAULT_RENDER_TYPE', RENDER_TYPE_ANIMATIC),
         help_text=_("The default render format for this story.")
     )
+    config = models.ForeignKey(Preset, verbose_name=_("config"), related_name='stories', on_delete=models.SET_NULL, null=True, blank=True
     
     def __str__(self):
         return "{}".format(self.name)
@@ -218,11 +225,69 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
         render.refresh_render()    
         return render
 
+    def get_elements_as_yaml(self):
+        """
+        Serializes the story's main elements (locations, characters, props, voices)
+        and reference Google Voices into a YAML formatted string.
+        """
+        
+        locations = [BackgroundSchema(name=b.name, prompt=b.prompt) for b in self.backgrounds.all()]
+        characters = [CharacterSchema(name=c.name, prompt=c.prompt) for c in self.characters.all()]
+        props = [PropSchema(name=p.name, prompt=p.prompt) for p in self.props.all()]
+        voices = [
+            VoiceSchema(
+                name=v.name,
+                prompt=v.prompt,
+                google_voice=v.google_voice.name if v.google_voice else None
+            ) for v in self.voices.all()
+        ]
+        google_voices = [
+            GoogleVoiceSchema(
+                name=gv.name,
+                description=gv.description or ""
+            ) for gv in GoogleVoice.objects.all()
+        ]
+
+        elements_data = StoryElementsSchema(
+            locations=locations,
+            characters=characters,
+            props=props,
+            voices=voices,
+            google_voices=google_voices
+        ).model_dump()
+
+        # Filter out empty lists before dumping to YAML
+        filtered_data = {k: v for k, v in elements_data.items() if v}
+
+        if not filtered_data:
+            return None
+        return yaml.dump({"story_context": filtered_data}, indent=2, default_flow_style=False)
+
 class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, ModelDisplayMixin):
+    
+    TASK_TEXT_GENERATE = settings.TASK_TYPE_GENERATE_TEXT
+    TASK_EXTRACT_SCENE = settings.TASK_TYPE_EXTRACT_SCENE
+
+    PRESET_FROM_SHOTS = "from_shots"
+    PRESET_FROM_PROMPT = "from_prompt"
+    PRESET_TRANSLATE =  "translate"
+    
+    ACTION_REFINE_FROM_SHOTS = f"{TASK_TEXT_GENERATE}_preset_{PRESET_FROM_SHOTS}"
+    ACTION_REFINE_FROM_PROMPT = f"{TASK_TEXT_GENERATE}_preset_{PRESET_FROM_PROMPT}"
+    ACTION_TRANSLATE_FROM_PROMPT = f"{TASK_TEXT_GENERATE}_preset_{PRESET_TRANSLATE}"
+    ACTION_GENERATE_STRUCTURE = settings.TASK_TYPE_EXTRACT_SCENE
+
+    ACTION_CHOICES = (
+        (ACTION_REFINE_FROM_SHOTS, _("Refine from shots")),
+        (ACTION_REFINE_FROM_PROMPT, _("Refine from prompt")),
+        (ACTION_TRANSLATE_FROM_PROMPT, _("Translate from prompt")),
+        (ACTION_GENERATE_STRUCTURE, _("Sync structure"))
+    )
+
     name = models.CharField(_("name"), max_length=200, null=True, blank=True)
     prompt = models.TextField(_("prompt"), null=True, blank=True, default="#Shots\n")
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
-    action = models.SlugField(_("action"), choices=settings.TASK_TYPE_CHOICES, null=True, blank=True)
+    action = models.SlugField(_("action"), choices=ACTION_CHOICES, null=True, blank=True)
 
     order = models.PositiveIntegerField(_("order"), default=0, db_index=True)
     story = models.ForeignKey('Story', verbose_name=_("story"), related_name='scenes', null=True, blank=True, on_delete=models.CASCADE)
@@ -235,71 +300,78 @@ class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, Mo
     def get_instructions(self, preset):
         return self.instructions.filter(category=preset)
 
+    def task_from_action(self, action_type, user, message=None):
+        """
+        Parses an action_type string to extract the task_type and an optional preset.
+        The expected format is 'task_type_preset_preset_name' or just 'task_type'.
+        """
+        parts = action_type.split('_preset_', 1)
+        task_type = parts[0]
+        preset = parts[1] if len(parts) > 1 else None
+        payload = {}
+        if preset:
+            payload['preset'] = preset
+        if message:
+            payload['message'] = message
+
+        task = Task.createTaskIfQueueEnabled(
+                subject=self,
+                task_type=task_type,
+                payload=payload if payload else None,
+                owner=user
+            )
+        return task
+
+    def shots(self):
+        return self.actions.all()
+    
+    def get_shots_as_yaml(self):
+        """
+        Serializes the scene's actions (shots) into a YAML formatted string.
+        """
+        shots = self.shots()
+        if not shots.exists():
+            return None
+
+        action_list = [
+            ActionSchema(
+                name=a.name,
+                order=a.order,
+                prompt=a.prompt or "",
+                prompt_comic=a.prompt_comic or "",
+                prompt_video=a.prompt_video or "",
+                prompt_voice=a.prompt_voice or "",
+                text=a.text or "",
+                voice=a.voice.name if a.voice else "None",
+                background=a.background.name if a.background else "None",
+                cast=[c.name for c in a.cast.all()],
+                props=[p.name for p in a.props.all()]
+            ).model_dump()
+            for a in shots
+        ]
+        
+        return yaml.dump(action_list, indent=2, default_flow_style=False)
+
     def get_contents(self, generate_self=True, preset=None):
         parts = []
         if not generate_self:
             parts.extend(self.story.style.get_contents(generate_self=False))
         else:
             if preset == self.PRESET_REFINE_PROMPT:
-                parts = [self.prompt_refine]
-                parts.append("following prompt to be improved")
-            parts.append(self.prompt)
-            shots = self.actions.all().order_by('order')
-            parts.append("### [Existing JSON/Text/MD State] ###")
-                
-            if shots.exists():
-                import json
-                from .schemas import ActionSchema
-                action_list = [
-                    ActionSchema(
-                        name=a.name,
-                        order=a.order,
-                        prompt=a.prompt or "",
-                        prompt_comic=a.prompt_comic or "",
-                        prompt_video=a.prompt_video or "",
-                        prompt_voice=a.prompt_voice or "",
-                        text=a.text or "",
-                        voice=a.voice.name if a.voice else "None",
-                        background=a.background.name if a.background else "None",
-                        cast=[c.name for c in a.cast.all()],
-                        props=[p.name for p in a.props.all()]
-                    ).model_dump()
-                    for a in shots
-                ]
-                parts.append("### EXISTING Shots  (Match names to update) ###")
-                parts.append(json.dumps(action_list, indent=2))
-
-            parts.append(self.prompt)
+                parts.append(self.prompt_refine)
+                if self.shots().exists():
+                    parts.append(self.get_shots_as_yaml())
+                else:
+                    parts.append(self.prompt)
+            elif preset == self.PRESET_FROM_SHOTS:
+                if self.shots().exists():
+                    parts.append(self.get_shots_as_yaml())
+            elif preset == self.PRESET_FROM_PROMPT:
+                parts.append(self.prompt)
             if self.story:
-                elements_parts = []
-                backgrounds = self.story.backgrounds.all()
-                if backgrounds.exists():
-                    elements_parts.append("Existing Locations (Backgrounds):")
-                    for b in backgrounds:
-                        elements_parts.append(f"- Name: {b.name}\n  Prompt: {b.prompt}")
-                characters = self.story.characters.all()
-                if characters.exists():
-                    elements_parts.append("Existing Characters (Actors - Cast):")
-                    for c in characters:
-                        elements_parts.append(f"- Name: {c.name}\n  Prompt: {c.prompt}")
-                props = self.story.props.all()
-                if props.exists():
-                    elements_parts.append("Existing Props:")
-                    for p in props:
-                        elements_parts.append(f"- Name: {p.name}\n  Prompt: {p.prompt}")
-                voices = self.story.voices.all()
-                if voices.exists():
-                    elements_parts.append("Existing Voices:")
-                    for p in voices:
-                        elements_parts.append(f"- Name: {p.name}\n  Prompt: {p.prompt}")
-                google_voices = GoogleVoice.objects.all()
-                if google_voices.exists():
-                    elements_parts.append("Reference Google Voices To chose base voice from:")
-                    for p in google_voices:
-                        elements_parts.append(f"- Name: {p.name}\n  Prompt: {p.description}")
-                if elements_parts:
-                    parts.append("### STORY CONTEXT ###\nReuse these existing entities if they appear:\n" + "\n".join(elements_parts))
-        return [p for p in parts if p is not None and (not isinstance(p, str) or p.strip() != "")]
+                elements_yaml = self.story.get_elements_as_yaml()
+                if elements_yaml: parts.append(elements_yaml)
+        return parts
 
     def get_cast(self):
         return Character.objects.filter(actions_cast__in=self.actions.all()).distinct()
@@ -691,9 +763,9 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
     def get_thumbnail(self, preset=None):
         return Image.open(self.image.path)
 
-    def generate_comic(self, user=None):
+    def generate_comic(self, user=None, target_field="image_comic"):
         image_agent = Agent.objects.filter(output_type=Agent.OUTPUT_TYPE_IMAGE).first()
-        out = image_agent.generate(self, preset=self.PRESET_COMIC, user=user)
+        out = image_agent.generate(self, preset=self.PRESET_COMIC, user=user, target_field=target_field)
         return out
     
     def intro(self):
@@ -709,12 +781,12 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
         if preset == self.PRESET_VIDEO or preset == self.PRESET_OMNI_VIDEO:
             contents = {}
             contents['prompt'] = self.prompt_video
-            contents['image'] = types.Image.from_file(location=self.image.path)
+            contents['image'] = self.image
         elif preset == self.PRESET_VIDEO_FIRST_LAST:
             contents = {}
             contents['prompt'] = self.prompt_video
-            contents['image_first'] = types.Image.from_file(location=self.image_first.path) if self.image_first else None
-            contents['image_last'] = types.Image.from_file(location=self.image_last.path) if self.image_last else None
+            contents['image_first'] = self.image_first or self.image
+            contents['image_last'] = self.image_last or contents['image_first']
         elif preset == self.PRESET_VOICE:
             contents = {}
             contents = self.voice.get_contents(generate_self=False, preset=Voice.PRESET_VOICE)
@@ -724,7 +796,7 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
             contents = super().get_contents(generate_self=generate_self, preset=preset)
             if preset != self.PRESET_COMIC and preset != self.PRESET_REFINE:
                 if self.consistent_with:
-                    contents.extend(["Maximise consistency, preserve character features and objects to the following image", self.consistent_with.get_thumbnail()])
+                    contents.extend(["Maximise consistency, preserve character features and objects to the following image", self.consistent_with.image])
                 if self.actor:
                     contents.extend(self.actor.get_contents(generate_self=False))
                 if self.cast:

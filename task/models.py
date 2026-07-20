@@ -23,12 +23,15 @@ class Task(models.Model):
     TASK_STATUS_ERROR = 3
     TASK_STATUS_SUCCESS = 4
     TASK_STATUS_SCHEDULED = 5
+    TASK_STATUS_RETRY = 6
+    
 
     TASK_STATUS_PROCESSABLE = [
         TASK_STATUS_PENDING,
         TASK_STATUS_HOLDING,
         TASK_STATUS_ERROR,
         TASK_STATUS_SCHEDULED,
+        TASK_STATUS_RETRY,
     ]
     
     TASK_STATUS_CHOICES = (
@@ -38,6 +41,7 @@ class Task(models.Model):
         (TASK_STATUS_ERROR, "Error"),
         (TASK_STATUS_HOLDING, "Holding"),
         (TASK_STATUS_SCHEDULED, "Scheduled"),
+        (TASK_STATUS_RETRY, "Retry"),
     )
     
     TASK_STATUS_DICT = dict(TASK_STATUS_CHOICES)
@@ -49,6 +53,7 @@ class Task(models.Model):
         TASK_STATUS_SUCCESS: 'green',
         TASK_STATUS_ERROR: 'red',
         TASK_STATUS_SCHEDULED: 'amber',
+        TASK_STATUS_RETRY: 'black',
     }
     
     
@@ -179,6 +184,7 @@ class Task(models.Model):
             self.set_status(self.TASK_STATUS_SCHEDULED)
         else:
             process_task.apply_async(kwargs={'task_id': self.id}, countdown=countdown)
+            
     def get_queue(self):
         queue = self.QUEUE_NORMAL
         if self.task_type in self.QUEUE_DICT:

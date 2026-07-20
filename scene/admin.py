@@ -7,6 +7,9 @@ from httpcore import request
 from unfold.admin import ModelAdmin
 from django.urls import path
 from django.urls import path, reverse
+from django import forms
+from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 
 from django.conf import settings
 from task.models import Task
@@ -15,6 +18,7 @@ from .models import ActionOrganizer, Character, Scene, Action, Background, Scene
 from .admin_utils import AjaxTaskModelAdmin, AdminLinker, handle_ajax_field_save
 from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
+from agent.models import Message
 from .sections import AuthorSection, SceneSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection, MessageHistorySection, MarkDownSection
 from .mixins import ACTION_FIELDSETS, ELEMENT_FIELDSETS, SceneFilterMixin, StaffReadOnlyMixin, StoryFilterMixin, ViewYourOwnMixin, PromptPreviewMixin, AdminActionsMixin
 from unfold.sections import TableSection, TemplateSection, render_to_string
@@ -29,7 +33,8 @@ from django.utils.safestring import mark_safe
 import markdown
 from django.contrib.auth.models import User
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
-
+from unfold.decorators import action
+        
 class AjaxSectionAdminMixin:
     def get_urls(self):
         urls = super().get_urls()
@@ -40,6 +45,14 @@ class AjaxSectionAdminMixin:
                 name='ajax_section_update',
             ),
         ]
+        
+        # Discover and add URLs from sections
+        if hasattr(self, "list_sections"):
+            for section_class in self.list_sections:
+                if hasattr(section_class, "get_section_urls"):
+                    section_instance = section_class(request=None, instance=None)
+                    section_urls = section_instance.get_section_urls(self)
+                    custom_urls.extend(section_urls)
         return custom_urls + urls
 
     def ajax_section_update_view(self, request):
@@ -155,32 +168,6 @@ class StoryAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
         self.request = request
         return super().changelist_view(request, extra_context)
 
-    def get_urls(self):
-        custom_urls = [
-            path('refresh-section/<int:object_id>/<str:section_key>/', 
-                 self.admin_site.admin_view(self.refresh_section_view), 
-                 name='story_refresh_section'),
-        ]
-        return custom_urls + super().get_urls()
-
-    def refresh_section_view(self, request, object_id, section_key):
-        instance = get_object_or_404(Story, pk=object_id)
-        if section_key == 'renders':
-            renders = instance.renders.all()
-            html = render_to_string("sections/scene_renders_items.html", {
-                "renders": renders,
-                "is_loaded": True,
-            })
-            return JsonResponse({"html": html})
-        else:
-            attr_name = 'backgrounds' if section_key == 'locations' else section_key
-            items = getattr(instance, attr_name).all().order_by('name')
-            html = render_to_string("sections/scene_cards_items.html", {
-                "items": items,
-                "is_loaded": True,
-            })
-            return JsonResponse({"html": html})
-
     def add_scene(self, obj):
         author = Author.objects.filter(user=self.request.user, story=obj).first()
         if author:
@@ -212,7 +199,7 @@ class SceneAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
     list_display = ['__str__', 'items', 'prompt', 'prompt_refine', 'last_tasks']
     list_editable = ['prompt', 'prompt_refine']
     autocomplete_fields = ['story', 'author', 'instructions']
-    actions = ['clone','extract_scene',  'generate_scene_elements', 'generate_scene_actions', 'generate_render', 'refresh_render']
+    actions = ['clone','extract_scene',  'generate_scene_elements', 'generate_scene_actions', 'generate_scene_voices', 'generate_scene_comics', 'generate_render', 'refresh_render']
     list_filter = ['story', 'id']
     
     fieldsets = (
@@ -229,48 +216,13 @@ class SceneAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
             "fields": ["name", "author", "story"],
         })
     )
-    list_sections = [MarkDownSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection, MessageHistorySection]
+    list_sections = [MessageHistorySection, MarkDownSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection ]
 
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "instructions":
             # Only show prompts that are not marked as global in the autocomplete
             kwargs["queryset"] = Prompt.objects.filter(is_global=False)
         return super().formfield_for_manytomany(db_field, request, **kwargs)
-
-    def get_urls(self):
-        return [
-            path('refresh-section/<int:object_id>/<str:section_key>/', 
-                 self.admin_site.admin_view(self.refresh_section_view), 
-                 name='scene_refresh_section'),
-        ] + super().get_urls()
-    
-    def refresh_section_view(self, request, object_id, section_key):
-        instance = get_object_or_404(Scene, pk=object_id)
-        if section_key == 'renders':
-            renders = instance.renders.all()
-            html = render_to_string("sections/scene_renders_items.html", {
-                "renders": renders,
-                "is_loaded": True,
-            })
-        else:
-            items = instance.get_elements().get(section_key, [])
-            html = render_to_string("sections/scene_cards_items.html", {
-                "items": items,
-                "is_loaded": True,
-            })
-
-        # Handle MarkDownSection
-        for section_class in self.list_sections:
-            if issubclass(section_class, MarkDownSection) and section_class.key == section_key:
-                section = section_class(request=request, instance=instance)
-                content = getattr(instance, section.field_name, "") or ""
-                html_content = mark_safe(markdown.markdown(content))
-                html = render_to_string("sections/markdown_section_content.html", {
-                    "html_content": html_content,
-                })
-                return JsonResponse({"html": html})
-
-        return JsonResponse({"html": html})
 
 
     def save_model(self, request, obj, form, change):
@@ -318,6 +270,7 @@ class CharacterAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin,
     actions = ['clone', 'default_generate_image', 'default_refine_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 @admin.register(Background)
 class BackgroundAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
@@ -330,6 +283,7 @@ class BackgroundAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin
     actions = ['clone', 'default_generate_image', 'default_refine_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 
 @admin.register(Prop)
@@ -344,6 +298,7 @@ class PropAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Admi
     actions = ['clone', 'default_generate_image', 'default_refine_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 
 @admin.register(Author)
@@ -382,6 +337,7 @@ class ActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, 
     search_fields = ['get_name']
     actions = ['clone', 'default_generate_image', 'default_refine_image']
     fieldsets = ACTION_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 @admin.register(VideoAction)
 class VideoActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
@@ -393,6 +349,7 @@ class VideoActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     search_fields = ['name']
     actions = ['generate_video', 'generate_video_first_last', 'generate_omni_video']
     fieldsets = ACTION_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 
 @admin.register(ComicAction)
@@ -406,6 +363,7 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     search_fields = ['name']
     actions = ['generate_comic', 'comic_to_video']
     fieldsets = ACTION_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 
 @admin.register(VoiceAction)
@@ -419,10 +377,11 @@ class VoiceActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     search_fields = ['name']
     actions = ['generate_voice']
     fieldsets = ACTION_FIELDSETS
+    list_sections = [MessageHistorySection]
 
 
 @admin.register(ActionOrganizer)
-class ActionOrganizerAdmin(AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, ModelAdmin):
+class ActionOrganizerAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, ModelAdmin):
     list_display = ('id', 'name', 'items', 'pic', 'scene', 'is_intro', 'order')
     list_editable = ['name', 'scene', 'is_intro', 'order']
     list_filter = ["scene__story", "scene"]
@@ -437,7 +396,7 @@ class SceneOrganizerAdmin(AjaxSectionAdminMixin, AdminActionsMixin, AdminLinker,
 
 
 @admin.register(Voice)
-class VoiceAdmin(AjaxSectionAdminMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
+class VoiceAdmin(AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
     list_display = ('__str__', 'prompt', 'google_voice', 'sample_text', 'link_story' , 'voice_player', 'last_tasks')
     list_editable = ['prompt']
     list_refresh = ['voice_player']    

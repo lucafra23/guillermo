@@ -1,5 +1,6 @@
 from moviepy import ImageClip, VideoFileClip, AudioFileClip, concatenate_videoclips
 from moviepy.video.fx import Resize
+from audiostretchy.stretch import stretch_audio
 from task.models import Task
 from agent.models import GetContentsMixin
 from django.utils.text import slugify
@@ -32,6 +33,9 @@ class VideoRender:
 
             elif item.render_type == item.RENDER_TYPE_ANIMATIC:
                 if render_item.image and render_item.audio:
+                    if item.story.conf and "audiostrech" in item.story.conf:
+                        stretch_audio("input_audio.wav", "stretched_audio.wav", ratio=1.5)
+
                     audio_clip = AudioFileClip(render_item.audio.path).with_effects([MultiplyVolume(0.9)])
 
                     # Get margins from 'params' field (space separated "start_ms end_ms")

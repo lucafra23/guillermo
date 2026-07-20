@@ -1,28 +1,36 @@
 import os
 from typing import Any
+from django import forms
 from django.utils.safestring import mark_safe
+from django.http import JsonResponse
 import markdown
 from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html, strip_tags
-from django.urls import reverse
+from django.urls import reverse, path
 
+from crispy_forms.helper import FormHelper
+from crispy_forms.layout import Layout, Fieldset, Div
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.admin.utils import label_for_field, lookup_field
+from django.shortcuts import get_object_or_404
 from django.db.models import Model
 from django.http import HttpRequest
 from django.template.loader import render_to_string
 
-from unfold.utils import display_for_field
+from unfold.utils import display_for_field, settings
 from unfold.sections import BaseSection, TemplateSection
 
 from .admin_utils import render_image_markup
-from scene.models import Author
+from scene.models import Author, Prop, Background, Character, Scene
+
+from agent.models import Message
 
 class TableSection(BaseSection):
     fields = []
     related_name = None
     verbose_name = None
     height = None
-    template_name ="sections/base.html"
+    template_name ="sections/table_section.html"
 
     def context_data(self) -> dict:
         return {}
@@ -74,52 +82,8 @@ class TableSection(BaseSection):
             self.template_name,
             context=context,
         )
+    
 
-class AuthorSection(TableSection):
-    model = Author
-    NO_USER_LABEL = _("Use Create User Action")
-    verbose_name = _("Authors")
-    
-    fields = ['name', 'scenes', 'nudges']
-    extra = 0
-    show_count = True  # This will run `count()`
-    collapsible = True
-    related_name = 'authors'
-    
-    def name(self, obj):
-        return f"{obj.user.username if obj.user else obj.email}"
-
-    def context_data(self) -> dict:
-        return {"description": _("Manage authors within the story edit page. If you add emails, guillermo will send an invitation by email.")}
-
-    def scenes(self, obj):
-        if obj.user:
-            if obj.user == self.request.user:
-                url = reverse("admin:scene_scene_add")
-                return format_html(
-                    '<a href="{}?story={}&author={}&next=/admin/scene/story/" class="bg-primary-600 text-white px-2 py-1 rounded-md text-[10px] font-bold hover:bg-primary-500 transition-colors shadow-sm inline-flex items-center gap-1">'
-                    '<span class="material-symbols-outlined text-[14px]">add</span>{}</a>',
-                    url, obj.story.id, obj.id, _("Add Scene")
-                )
-            else:
-                url = f"/admin/scene/scene/?story__id__exact={obj.story.id}&author__id__exact={obj.id}"
-                return format_html(
-                    '<a href="{}" class="text-primary-600 font-medium hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 inline-flex items-center gap-1">'
-                    '<span class="material-symbols-outlined text-[16px]">visibility</span>{}</a>',
-                    url, _("View")
-                )
-        return self.NO_USER_LABEL
-    
-    def nudges(self, obj):
-        nudge_link = self.NO_USER_LABEL
-        if obj.user:
-            nudge_count = obj.user.received_nudges.count()
-            nudge_link = format_html("<a href='/admin/scene/nudge/?receiver__id__exact={0}' class='text-primary-600 font-medium hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300'>{1}</a>", obj.user.id, nudge_count) 
-            if (obj.user != self.request.user):
-                add_link = format_html("<a href='/admin/scene/nudge/add/?receiver={0}&story={1}&sender={2}' class='text-primary-600 font-medium hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 ml-1'>-></a>", obj.user.id, obj.story.id, self.request.user.id)
-                nudge_link = format_html("{} {}", nudge_link, add_link)
-        return mark_safe(nudge_link)
-    
 
 
 class ThemeSection(TemplateSection):
@@ -177,139 +141,364 @@ class SceneSection(TableSection):
     fields = ['get_name', "items", 'prompt']
     extra = 0
     show_count = True  # This will run `count()`
-    collapsible = False
+    collapsible = True
     related_name = 'scenes'
 
-class RenderSection(TemplateSection):
+class AjaxSection(TemplateSection):
+    """Base class for sections that need to handle their own AJAX URLs."""
+
+    @classmethod
+    def get_section_urls(cls, model_admin):
+        """
+        Return a list of URL patterns for the admin.
+        The ModelAdmin will discover and register these.
+        """
+        return []
+
+    @classmethod
+    def get_url_name(cls, action):
+       return f"{cls.__name__.lower()}_{action}"
+
+
+
+class AuthorSection(AjaxSection):
+    model = Author
+    NO_USER_LABEL = _("Use Create User Action")
+    title = _("Authors")
+    key = 'authors'
+    template_name = "sections/author_section.html"
+    collapsible = True
+
+    fields = ['name', 'scenes', 'nudges']
+    related_name = 'authors'
+
+    @classmethod
+    def get_section_urls(cls, model_admin):
+        return [
+            path(f'refresh-section/{cls.key}/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.refresh_view),
+                 name=cls.get_url_name('refresh_section')),
+        ]
+
+    @classmethod
+    def refresh_view(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+
+        results = getattr(instance, cls.related_name)
+        
+        headers = []
+        for field_name in cls.fields:
+            if hasattr(cls.model, field_name):
+                headers.append(label_for_field(field_name, cls.model))
+            else:
+                headers.append(field_name.replace('_', ' ').title())
+
+        rows = []
+
+        for result in results.all():
+            row_data = {
+                'name': f"{result.user.username if result.user else result.email}",
+                'scenes': cls._get_scenes_html(request, result),
+                'nudges': cls._get_nudges_html(request, result)
+            }
+            rows.append([row_data[field] for field in cls.fields])
+
+        context = {
+            "table": {"headers": headers, "rows": rows},
+            "description": _("Manage authors for this story. Add an email to invite a new author."),
+        }
+        html = render_to_string("sections/author_section_content.html", context, request=request)
+        return JsonResponse({"html": html})
+
+    @classmethod
+    def _get_scenes_html(cls, request, obj):
+        scene_count = obj.scenes.count()
+        url = reverse("admin:scene_scene_changelist") + f"?author__id__exact={obj.id}"
+        return format_html(
+            '<a href="{}" class="text-primary-600 font-medium hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{}</a>',
+            url,
+            scene_count
+        )
+
+    @classmethod
+    def _get_nudges_html(cls, request, obj):
+        nudge_link = cls.NO_USER_LABEL
+        if obj.user:
+            nudge_count = obj.user.received_nudges.count()
+            nudge_link = format_html("<a href='/admin/scene/nudge/?receiver__id__exact={0}' class='text-primary-600 font-medium hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300'>{1}</a>", obj.user.id, nudge_count) 
+            if (obj.user != request.user):
+                add_link = format_html("<a href='/admin/scene/nudge/add/?receiver={0}&story={1}&sender={2}' class='text-primary-600 font-medium hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300 ml-1'>-></a>", obj.user.id, obj.story.id, request.user.id)
+                nudge_link = format_html("{} {}", nudge_link, add_link)
+        return mark_safe(nudge_link)
+    
+    def get_context_data(self, request, instance) -> dict:
+        content_type = ContentType.objects.get_for_model(instance)
+        return {
+            "title": self.title,
+            "instance": instance,
+            "section_key": self.key,
+            "is_loaded": False,
+            "collapsible": self.collapsible,
+            "content_type_id": content_type.id,
+        }
+
+
+class RenderSection(AjaxSection):
     template_name = "sections/scene_renders.html"
     key = 'renders'
+    title = _("Renders & Videos")
+    collapsible = True
+
+    @classmethod
+    def get_section_urls(cls, model_admin):
+        return [
+            path(f'refresh-section/{cls.key}/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.refresh_view),
+                 name=cls.get_url_name('refresh_section')),
+        ]
+
+    @classmethod
+    def refresh_view(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+        html = render_to_string("sections/scene_renders_items.html", {"renders": instance.renders.all()})
+        return JsonResponse({"html": html})
 
     def get_context_data(self, request, instance):
+        content_type = ContentType.objects.get_for_model(instance)
         return {
-            "renders": instance.renders.all(),
+            "title": self.title,
             "instance": instance,
-            "section_key": self.key
+            "section_key": self.key,
+            "is_loaded": False,
+            "collapsible": self.collapsible,
+            "content_type_id": content_type.id,
         }
-class SceneBaseCardsSection(TemplateSection):
+
+
+class SceneBaseCardsSection(AjaxSection):
     template_name = "sections/scene_cards.html"
     key = None
     title = None
     item_method = None
     collapsible = True
 
-    def get_context_data(self, request, instance):
-        items = []
-        # Load items immediately for initial render
-        if self.item_method and hasattr(instance, self.item_method):
-            items = getattr(instance, self.item_method)()
+    def get_section_urls(cls, model_admin):
+        return [
+            path(f'refresh-section/{cls.key}/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.refresh_view),
+                 name=cls.get_url_name('refresh_section')),
+        ]
 
+    @classmethod
+    def refresh_view(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+
+        items = getattr(instance, cls.item_method)().order_by('name')
+
+        context = {
+            "items": items,
+            "is_loaded": True,
+        }
+        html = render_to_string("sections/scene_cards_items.html", context)
+        return JsonResponse({"html": html})
+
+    def get_context_data(self, request, instance):
+        content_type = ContentType.objects.get_for_model(instance)
         return {
             "title": self.title,
-            "items": items,
+            "items": [],
             "instance": instance,
             "section_key": self.key,
             "collapsible": self.collapsible,
-            "is_loaded": True,
+            "is_loaded": False,
+            "content_type_id": content_type.id,
         }
 
 
-class MarkDownSection(TemplateSection):
+class MarkDownSection(AjaxSection):
     template_name = "sections/markdown_section.html"
     field_name = "prompt"
     title = "Script"
     key = "script"
 
-    def get_context_data(self, request, instance) -> dict:
-        content = getattr(instance, self.field_name, "") or ""
-        html_content = mark_safe(markdown.markdown(content))
+    @classmethod
+    def get_section_urls(cls, model_admin):
+        return [
+            path(f'refresh-section/{cls.key}/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.refresh_view),
+                 name=cls.get_url_name('refresh_section')),
+        ]
 
+    @classmethod
+    def refresh_view(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+        content = getattr(instance, cls.field_name, "") or ""
+        html_content = mark_safe(markdown.markdown(content))
+        html = render_to_string("sections/markdown_section_content.html", {"html_content": html_content})
+        return JsonResponse({"html": html})
+
+    def get_context_data(self, request, instance) -> dict:
+        content_type = ContentType.objects.get_for_model(instance)
         return {
             "title": self.title,
             "instance": instance,
             "section_key": self.key,
-            "html_content": html_content,
-            "is_loaded": True,
+            "is_loaded": False,
+            "collapsible": True,
+            "content_type_id": content_type.id,
         }
 
 
 class SceneCharactersSection(SceneBaseCardsSection):
     key = 'characters'
+    model = Character
     title = _("Characters")
     item_method = 'get_cast'
+
+    
 
 
 class SceneLocationsSection(SceneBaseCardsSection):
     key = 'locations'
+    model = Background
     title = _("Locations")
     item_method = 'get_locations'
 
 
 class ScenePropsSection(SceneBaseCardsSection):
     key = 'props'
+    model = Prop
     title = _("Props")
     item_method = 'get_props'
 
 
-class MessageHistorySection(TableSection):
-    verbose_name = _("AI Generation History")
-    related_name = 'messages'
-    fields = ['created_at_fmt', 'agent_info', 'input_parts', 'output_result']
 
-    def created_at_fmt(self, obj):
-        return obj.created_at.strftime("%Y-%m-%d %H:%M")
-    created_at_fmt.short_description = _("Date")
+class ChatMessageForm(forms.Form):
+    chat_input = forms.CharField(
+        widget=forms.Textarea(attrs={
+            'rows': 3,  # Increase the default number of rows
+            'placeholder': _('Type your message...'),
+        }),
+        label=""
+    )
+    action = forms.ChoiceField(
+        choices=[],  # Start with empty choices, will be populated in __init__
+        required=False,
+        label="",
+        widget=forms.Select()  # Explicitly use the Select widget
+    )
 
-    def agent_info(self, obj):
-        target = obj.target_field if obj.target_field else "-"
-        return format_html(
-            '<span class="font-bold text-font-important-light dark:text-font-important-dark">{}</span><br/>'
-            '<span class="text-[10px] uppercase tracking-wider text-base-500">Target: {}</span>',
-            obj.agent.name if obj.agent else "-",
-            target
+    def __init__(self, *args, **kwargs):
+        # Pop the instance from kwargs before calling super()
+        instance = kwargs.pop('instance', None)
+        super().__init__(*args, **kwargs)
+
+        # Dynamically set choices based on the instance provided
+        action_choices = getattr(instance, 'ACTION_CHOICES', Scene.ACTION_CHOICES)
+        self.fields['action'].choices = action_choices
+
+        self.helper = FormHelper()
+        self.helper.form_tag = False  # We handle the form tag in the template
+        self.helper.disable_csrf = True
+        self.helper.form_show_labels = False
+        self.helper.layout = Layout(
+            Div(
+                'chat_input',
+                'action',
+                css_class="space-y-4"  # Add vertical space between fields
+            )
         )
-    agent_info.short_description = _("Agent / Target")
 
-    def input_parts(self, obj):
-        if not obj.input_data:
-            return "-"
+class MessageHistorySection(AjaxSection):
+    verbose_name = _("Chat")
+    template_name = "sections/chat_section.html"
+    collapsible = True
+    key = 'messages'
+    
 
-        items = []
-        if isinstance(obj.input_data, list):
-            for i, part in enumerate(obj.input_data):
-                items.append(format_html(
-                    '<div class="mb-3 last:mb-0 pb-2 border-b border-base-200 dark:border-base-700 last:border-0">'
-                    '<span class="text-[9px] font-bold opacity-50 uppercase block mb-1">Part {}</span>'
-                    '{}</div>', 
-                    i + 1, part
-                ))
-        elif isinstance(obj.input_data, dict):
-            for key, val in obj.input_data.items():
-                items.append(format_html('<div><b class="capitalize text-primary-600">{}</b>: {}</div>', key, val))
-        else:
-            items.append(str(obj.input_data))
-
-        return format_html(
-            '<div class="max-h-48 min-w-[300px] overflow-y-auto text-[10px] font-mono bg-base-50 dark:bg-base-800/50 p-3 rounded-lg border border-base-200 dark:border-base-700 text-base-600 dark:text-base-400">{}</div>',
-            mark_safe("".join(items))
-        )
-    input_parts.short_description = _("Input Context")
-
-    def output_result(self, obj):
-        if obj.output_image:
-            model_label = f"{obj._meta.app_label}.{obj._meta.model_name}"
-            return render_image_markup(obj.output_image.url, model_label, obj.pk, 'output_image', 80, _("Output Image"))
+    @classmethod
+    def get_section_urls(cls, model_admin):
+        # The URL name is now unique per model, preventing conflicts.
+        return [
+            path('chat-message/<int:content_type_id>/<int:object_id>/', 
+                 model_admin.admin_site.admin_view(cls.chat_form_submit), 
+                 name=cls.get_url_name('chat_message')),
+            path('refresh-section/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.refresh_view),
+                 name=cls.get_url_name('refresh_section')),
+        ]
+    
+    @classmethod
+    def chat_form_submit(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
         
-        if obj.output_file:
-            ext = os.path.splitext(obj.output_file.name)[1].lower()
-            if ext in ['.mp4', '.mov', '.webm']:
-                return format_html('<video src="{}" class="h-20 w-auto rounded bg-black" controls muted></video>', obj.output_file.url)
-            if ext in ['.mp3', '.wav']:
-                return format_html('<audio src="{}" controls class="h-8 w-48 scale-90 origin-left"></audio>', obj.output_file.url)
-            return format_html('<a href="{}" class="text-primary-600 underline text-xs" download>{}</a>', obj.output_file.url, _("Download File"))
-            
-        if obj.output_text:
-            html = markdown.markdown(obj.output_text)
-            return format_html('<div class="max-h-32 overflow-y-auto text-xs prose prose-sm dark:prose-invert max-w-sm">{}</div>', mark_safe(html))
-            
-        return "-"
-    output_result.short_description = _("Output")
+        # Create the task and get its initial status
+        task = instance.task_from_action(
+            action_type=request.POST.get('action'), 
+            message=request.POST.get('chat_input'), 
+            user=request.user
+        )
+        task_status = task.status if task else None
+
+        # Prepare the response for the frontend
+        chat_html = render_to_string(
+            "sections/chat_section_content.html", 
+            cls.get_context(request, instance, content_type_id, object_id), 
+            request=request
+        )
+        
+        return JsonResponse({
+            "status": "task_created",
+            "task_status": task_status,
+            "html": chat_html,
+        })
+
+    @classmethod
+    def refresh_view(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+        
+        context = cls.get_context(request, instance, content_type_id, object_id)
+        html = render_to_string("sections/chat_section_content.html", context, request=request)
+        return JsonResponse({"html": html})
+
+    @classmethod
+    def get_context(cls, request, instance, content_type_id, object_id):
+        # Pass the instance to the form to dynamically set its choices
+        url = f"chat-message/{content_type_id}/{object_id}/"
+        form = ChatMessageForm(instance=instance)
+        context = {
+            "messages": instance.messages.all(),
+            "form": form,
+            "instance": instance,
+            "section_key": cls.key,
+            "content_type_id": content_type_id,
+            "chat_submit_url": url,
+        }
+        return context
+
+    def get_context_data(self, request, instance) -> dict:
+        content_type = ContentType.objects.get_for_model(instance)
+        # The initial context for the section wrapper.
+        # The actual content is loaded via AJAX by refresh_view.
+        context = super().get_context_data(request, instance)
+        context.update({
+            "title": self.verbose_name,
+            "instance": instance,
+            "section_key": self.key,
+            "is_loaded": False, # Important: tells the frontend to fetch content
+            "collapsible": self.collapsible,
+            "content_type_id": content_type.id,
+        })
+        return context

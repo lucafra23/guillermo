@@ -11,7 +11,7 @@
             "request": "launch",
             "args": [
                 "runserver",
-                "localhost:8000",
+                "localhost:8080",
                 "--noreload"
             ],
             "django": true,

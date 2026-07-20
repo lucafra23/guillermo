@@ -60,7 +60,12 @@ INSTALLED_APPS = [
     'import_export',
     'unfold.contrib.import_export',
     'django_celery_beat',
+    'crispy_forms',
 ]
+
+
+CRISPY_TEMPLATE_PACK = "unfold_crispy"
+CRISPY_ALLOWED_TEMPLATE_PACKS = ["unfold_crispy"]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -419,8 +424,13 @@ TASK_TYPE_GENERATE_SCENE = 'generate_scene_video'
 TASK_TYPE_GENERATE_VOICE = 'generate_voice'
 TASK_TYPE_GENERATE_TEXT = 'generate_text'
 TASK_TYPE_GENERATE_SCENE = 'generate_scene'
+
 TASK_TYPE_GENERATE_SCENE_ELEMENTS = 'generate_scene_elements'
 TASK_TYPE_GENERATE_SCENE_ACTIONS = 'generate_scene_actions'
+
+TASK_TYPE_GENERATE_SCENE_VOICES = 'generate_scene_voices'
+TASK_TYPE_GENERATE_SCENE_COMICS = 'generate_scene_comics'
+
 TASK_TYPE_EXTRACT_SCENE = 'extract_scene'
 TASK_TYPE_SYNC_EXPORT = 'sync_export'
 TASK_TYPE_SYNC_IMPORT = 'sync_import'
@@ -437,11 +447,16 @@ TASK_DELEGATES = {
     TASK_TYPE_GENERATE_VIDEO_FIRST_LAST: 'scene.tasks.tasks.TaskGenerateVideoFirstLast',
     TASK_TYPE_GENERATE_COMIC: 'scene.tasks.tasks.TaskGenerateComic',
     TASK_TYPE_GENERATE_VOICE: 'scene.tasks.tasks.TaskGenerateVoice',
+    
     TASK_TYPE_GENERATE_TEXT: 'scene.tasks.tasks.TaskGenerateText',
+
     TASK_TYPE_GENERATE_SCENE: 'scene.tasks.tasks.TaskGenerateScene',
 
     TASK_TYPE_GENERATE_SCENE_ELEMENTS: 'scene.tasks.tasks.TaskGenerateElements',
     TASK_TYPE_GENERATE_SCENE_ACTIONS: 'scene.tasks.tasks.TaskGenerateShots',
+    
+    TASK_TYPE_GENERATE_SCENE_VOICES: 'scene.tasks.tasks.TaskGenerateVoices',
+    TASK_TYPE_GENERATE_SCENE_COMICS: 'scene.tasks.tasks.TaskGenerateComic',
 
     TASK_TYPE_EXTRACT_SCENE: 'scene.tasks.tasks.TaskExtractScene',
     # sync
@@ -462,9 +477,12 @@ TASK_TYPE_CHOICES = (
     (TASK_TYPE_VIDEO_RENDER, _("Render Video")),
     (TASK_TYPE_GENERATE_VOICE, _("Generate Voice")),
     (TASK_TYPE_GENERATE_TEXT, _("Generate Text")),
+
     (TASK_TYPE_GENERATE_SCENE, _("Generate Scene")),
     (TASK_TYPE_GENERATE_SCENE_ELEMENTS, _("Generate Elements")),
     (TASK_TYPE_GENERATE_SCENE_ACTIONS, _("Generate Shots")),
+    (TASK_TYPE_GENERATE_SCENE_VOICES, _("Generate Voices")),
+    (TASK_TYPE_GENERATE_SCENE_COMICS, _("Generate Comics")),
     (TASK_TYPE_EXTRACT_SCENE, _("Extract Scene")),
     (TASK_TYPE_SYNC_EXPORT, _("Sync Export")),
     (TASK_TYPE_SYNC_IMPORT, _("Sync Import")),
