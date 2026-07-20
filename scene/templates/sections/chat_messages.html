@@ -1,0 +1,94 @@
+{% load i18n unfold %}
+{% for message in messages %}
+    {# Instructions Part #}
+    {% with instructions=message.parts_instructions %}
+        {% if instructions %}
+            <div class="flex items-start gap-3 my-3">
+                <div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center">
+                    <span class="material-symbols-outlined text-lg text-gray-500 dark:text-gray-400">integration_instructions</span>
+                </div>
+                <div class="bg-yellow-50 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 rounded-lg p-3 max-w-lg space-y-2 border border-yellow-200 dark:border-yellow-800/50">
+                    {% for part in instructions %}<p class="text-xs italic">{{ part.text }}</p>{% endfor %}
+                </div>
+            </div>
+        {% endif %}
+    {% endwith %}
+
+    {# User Input Part #}
+    <div class="flex items-start gap-3 my-3">
+        <div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center font-bold text-sm text-gray-600 dark:text-gray-300">
+            {{ message.user.username|first|upper }}
+        </div>
+        <div class="bg-white dark:bg-gray-800/80 rounded-lg p-3 my-3 max-w-lg space-y-3 border border-gray-200 dark:border-gray-700/50">
+            {% for part in message.parts_input %}
+                <div class="message-part">
+                    {% if part.text %}
+                        <div class="text-sm expandable-text">
+                            {% if part.text|length > 200 %}
+                                <div class="summary-text">
+                                    {{ part.text|slice:":200"|linebreaksbr }}... <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read more" %}</button>
+                                </div>
+                                <div class="full-text" style="display: none;">
+                                    {{ part.text|linebreaksbr }} <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read less" %}</button>
+                                </div>
+                            {% else %}
+                                <p>{{ part.text|linebreaksbr }}</p>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                    {% if part.image %}
+                        {% with image_url=part.image.url alt_text=_("User uploaded image") %}
+                            {% include "sections/chat_image_part.html" %}
+                        {% endwith %}
+                    {% endif %}
+                    {% if part.json %}
+                        <pre class="text-xs bg-black/5 dark:bg-black/20 p-2 rounded-md whitespace-pre-wrap">{{ part.json|json_script:"json-data" }}</pre>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    {# Agent Output Part #}
+    <div class="flex items-start gap-3 justify-end my-3">
+        <div class="bg-primary-50 dark:bg-primary-900/30 text-primary-800 dark:text-primary-100 rounded-lg p-3 max-w-lg space-y-3 my-3">
+            {% for part in message.parts_output %}
+                <div class="message-part">
+                    {% if part.text %}
+                        <div class="prose prose-sm dark:prose-invert max-w-none expandable-text">
+                            {% if part.text|length > 200 %}
+                                <div class="summary-text">
+                                    {{ part.text|slice:":200"|safe }}... <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read more" %}</button>
+                                </div>
+                                <div class="full-text" style="display: none;">
+                                    {{ part.text|safe }} <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read less" %}</button>
+                                </div>
+                            {% else %}
+                                <p>{{ part.text|safe }}</p>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                    {% if part.image %}
+                        {% with image_url=part.image.url alt_text=_("Agent generated image") %}
+                            {% include "sections/chat_image_part.html" %}
+                        {% endwith %}
+                    {% endif %}
+                    {% if part.file %}<a href="{{ part.file.url }}" download class="text-primary-600 hover:underline">{% trans "Download File" %}</a>{% endif %}
+                </div>
+            {% endfor %}
+        </div>
+        <div class="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex-shrink-0 flex items-center justify-center">
+            <span class="material-symbols-outlined text-indigo-600 dark:text-indigo-300">smart_toy</span>
+        </div>
+    </div>
+{% empty %}
+    <div class="flex flex-col items-center justify-center h-full text-center py-16 px-6">
+        <span class="material-symbols-outlined text-5xl text-gray-300 dark:text-gray-700 mb-4">
+            chat_bubble
+        </span>
+        <h3 class="text-lg font-semibold text-gray-700 dark:text-gray-300">{% trans "Start the Conversation" %}</h3>
+        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400 max-w-xs">
+            {% trans "Use the input below to ask questions, give commands, or start a task with the AI assistant." %}
+        </p>
+    </div>
+{% endfor %}

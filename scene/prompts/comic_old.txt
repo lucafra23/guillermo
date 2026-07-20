@@ -1,0 +1,13 @@
+==================================
+#Caption
+====================================
+Create a light cream background with a sans serif font. 
+center it and create a smart main title
+==================================
+
+[Placement Rules]
+1. **Enforced Safety Margins:** All bubbles, tails, and caption boxes must respect a strict 20% safety margin from the outer edges of the image. 
+
+2. **Do not cover important elements** Lettering elements must be strategically placed in negative space (sky, uniform walls, empty ground). Never overlap facial expressions, primary character eyes, or crucial background details.
+3. **Absolute Legibility:** Characters must not warp, melt, blend into the background, or turn into illegible AI artifacts. Render lettering with the precise sharpness of a vector graphic overlay.
+4. **Exact Text Match:** Re---

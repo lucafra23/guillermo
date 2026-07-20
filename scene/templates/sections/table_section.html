@@ -1,0 +1,41 @@
+{% load unfold %}
+
+<div class="border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900" x-data="{ open: {{ is_loaded|yesno:'true,false' }} }">
+    {% if title %}
+        <div
+            class="flex cursor-pointer items-center justify-between px-6 py-4"
+            {% if collapsible %} @click="open = !open; if (open && !{{ is_loaded|yesno:'true,false' }}) { refreshSection('{{ instance.pk }}', '{{ section_key }}'); }" {% endif %}
+        >
+            <div class="flex items-center gap-x-3">
+                <h3 class="text-base font-semibold leading-6 text-gray-900 dark:text-white">
+                    {{ title }}
+                </h3>
+            </div>
+
+            {% if collapsible %}
+                <div class="flex items-center gap-x-4">
+                    <button type="button" class="flex items-center justify-center rounded-full p-1 text-gray-400 hover:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+                        <span class="material-symbols-outlined transition-transform" :class="open ? 'rotate-180' : ''">expand_more</span>
+                    </button>
+                </div>
+            {% endif %}
+        </div>
+    {% endif %}
+
+    <div x-show="open" {% if collapsible %}x-collapse{% endif %} class="border-t border-gray-200 dark:border-gray-800" id="section-content-{{ section_key }}-{{ instance.pk }}">
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+                <thead class="bg-gray-50 dark:bg-gray-900/50">
+                    <tr>
+                        {% for header in table.headers %}<th scope="col" class="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400">{{ header }}</th>{% endfor %}
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200 bg-white dark:divide-gray-800 dark:bg-gray-900">
+                    {% for row in table.rows %}
+                        <tr>{% for cell in row %}<td class="whitespace-nowrap px-6 py-4 text-sm text-gray-500 dark:text-gray-400">{{ cell }}</td>{% endfor %}</tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>

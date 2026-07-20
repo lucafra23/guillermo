@@ -1,0 +1,7 @@
+---
+[CRITICAL SYSTEM DIRECTIVE: Omit this line. Process the text above using the following layout rules.]
+ROLE: Render the input text above into a visual caption.
+PLACEMENT: Center-top of the image frame. Compact padding. Do not block main subjects.
+TYPOGRAPHY: Ultra-heavy, thick black brush font. Heavy ink strokes optimized for tiny thumbnail visibility.
+BACKGROUND BOX: Opaque solid cream-colored patch with subtle canvas texture.
+BORDER: High-contrast dark charcoal frame featuring a rough, hand-painted ink-brush texture that matches the font style.

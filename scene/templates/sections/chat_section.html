@@ -1,0 +1,54 @@
+{% load i18n %}
+<div
+    id="section-{{ section_key }}"
+    class="relative w-full bg-white rounded-lg shadow-sm dark:bg-gray-900 border border-gray-200 dark:border-gray-800"
+    x-data="{
+        isLoaded: false,
+        isLoading: false,
+        isCollapsed: {{ collapsible|yesno:'true,false' }},
+        loadSection() {
+            if (this.isLoaded || this.isLoading) return;
+            this.isLoading = true;
+            const url = `{{ request.path }}refresh-section/{{ content_type_id }}/{{ instance.pk }}/`;
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    this.$refs.content.innerHTML = data.html;
+                    this.isLoaded = true;
+                })
+                .catch(error => console.error('Error loading section:', error))
+                .finally(() => this.isLoading = false);
+        }
+    }"
+    x-init="if (!isCollapsed) { loadSection(); }" data-content-type-id="{{ content_type_id }}"
+>
+    <div class="flex items-center justify-between w-full px-4 py-3">
+        <div class="flex items-center gap-3">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ title }}</h3>
+            <a href="{% url 'admin:agent_message_changelist' %}?content_type__id__exact={{ content_type_id }}&object_id__exact={{ instance.pk }}"
+               class="text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300"
+               title="{% trans 'View all messages' %}">
+                <span class="material-symbols-outlined text-lg">open_in_new</span>
+            </a>
+        </div>
+        <div class="flex items-center gap-x-2">
+            <button type="button" @click.stop="isLoaded = false; loadSection()"
+                    class="cursor-pointer inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-600 hover:text-primary-500 dark:text-primary-400 transition-colors group">
+                <span class="material-symbols-outlined text-[16px] group-hover:rotate-180 transition-transform duration-500">refresh</span>
+            </button>
+            {% if collapsible %}
+                <button @click="isCollapsed = !isCollapsed; if (!isCollapsed) loadSection();" type="button" class="flex items-center justify-center w-8 h-8 text-gray-400 transition-colors rounded-full hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-300">
+                    <span class="material-symbols-outlined" x-text="isCollapsed ? 'expand_more' : 'expand_less'"></span>
+                </button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div x-show="!isCollapsed" class="border-t border-gray-200 dark:border-gray-800" style="display: none; height: 70vh;">
+        <div x-ref="content" class="flex flex-col h-full">
+            <div x-show="isLoading" class="flex items-center justify-center p-6">
+                <span class="material-symbols-outlined text-4xl animate-spin text-primary-500">progress_activity</span>
+            </div>
+        </div>
+    </div>
+</div>
