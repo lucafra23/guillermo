@@ -480,6 +480,7 @@ TASK_TYPE_CHOICES = (
     (TASK_TYPE_EXTRACT_SCENE, _("Extract Scene")),
     (TASK_TYPE_SYNC_EXPORT, _("Sync Export")),
     (TASK_TYPE_SYNC_IMPORT, _("Sync Import")),
+    (TASK_TYPE_LETTER_ACTION, _("Letter Panel")),
     (TASK_TYPE_GENERATE_SCENE, _("Generate Scene Video")),
 
 )

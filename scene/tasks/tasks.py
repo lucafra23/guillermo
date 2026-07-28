@@ -81,9 +81,15 @@ class TaskLetterAction:
         except Exception as e:
             # A malformed spec or a missing plate is an authoring error, not an outage: say
             # which panel and why, so a bulk pass reports the bad ones instead of dying silently.
+            #
+            # Deliberately NOT re-raised. The status and the log are already recorded here, and
+            # the runner's handler in task/tasks.py does `e.status in TASK_RETRY_EXCEPTIONS` —
+            # a plain ValueError has no `.status`, so re-raising turns a clear "this panel's
+            # spec is bad" into an AttributeError in the Celery log and skips the runner's
+            # next_tasks dispatch entirely.
             self.task.log(f"Lettering failed for action {item.id} ({item.name}): {e}")
             self.task.set_status(Task.TASK_STATUS_ERROR)
-            raise
+            return
         self.task.log(
             f"Lettered action {item.id} ({item.name})" if out
             else f"Action {item.id} ({item.name}) has no lettering; cleared any stale composite"

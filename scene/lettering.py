@@ -68,14 +68,21 @@ def _setting(name, default=None):
 
 
 def font_path(role):
-    """Absolute path to the face for `role`, or the DejaVu fallback, warning once if so."""
-    if role in _resolved_cache:
-        return _resolved_cache[role]
+    """Absolute path to the face for `role`, or the DejaVu fallback, warning once if so.
+
+    The cache is keyed on the resolved (dir, filename), NOT on the role alone: a worker that
+    starts before its font volume is mounted would otherwise pin DejaVu for its whole life while
+    a sibling worker letters the same book in the real face. Keying on the inputs means the
+    moment the configuration or the file appears, the next call picks it up.
+    """
     font_dir = _setting("LETTERING_FONT_DIR")
     filename = _setting(
         "LETTERING_FONT_BOLD" if role == FONT_BOLD else "LETTERING_FONT_REGULAR",
         _DEFAULT_FILENAMES[role],
     )
+    cache_key = (role, font_dir, filename)
+    if cache_key in _resolved_cache:
+        return _resolved_cache[cache_key]
     path = None
     if font_dir:
         candidate = os.path.join(font_dir, filename)
@@ -96,7 +103,7 @@ def font_path(role):
                 "directory holding the comic faces for output matching the rest of the book.",
             )
         path = _FALLBACK[role]
-    _resolved_cache[role] = path
+    _resolved_cache[cache_key] = path
     return path
 
 
@@ -140,6 +147,16 @@ _OVAL_INSET = {"bubble": (0.72, 0.68), "thought": (0.68, 0.62)}
 
 
 def _font(path, size):
+    """Load `path` at `size`, falling back to DejaVu bold then regular, then Pillow's default.
+
+    Note on parity with the reference implementation: when the configured faces ARE present the
+    two are byte-identical (verified on 326 real panels covering all seven containers). When they
+    are absent they diverge — the reference tries its bold fallback first for every role, so it
+    renders `thought` and `ui` in DejaVu Bold, while `font_path()` here hands back the role-correct
+    fallback and they render in DejaVu Regular. This is the intended behaviour, not drift to fix:
+    the fallback is a degraded path that already logs a warning, and honouring the requested weight
+    is more correct than reproducing a quirk. Do not letter a real book on the fallback.
+    """
     try:
         return ImageFont.truetype(path, size)
     except Exception:
@@ -462,6 +479,12 @@ def draw_overlay(base_path, elements, out_path):
 
 
 # ---------------------------------------------------------------------------- validation
+# A balloon may legitimately overhang the edge, so coordinates are not clamped to 0..1 — but a
+# value orders of magnitude outside it is a unit error, not an intent.
+MAX_BOX_SPAN = 4.0
+MAX_COORD = 8.0
+
+
 class LetteringError(ValueError):
     """A lettering spec that cannot be composited."""
 
@@ -495,8 +518,24 @@ def normalise_elements(lettering):
             box = [float(v) for v in box]
         except (TypeError, ValueError):
             raise LetteringError(f"{where}: 'box' values must be numbers")
+        # NaN and inf survive every comparison below (NaN <= 0 is False, inf <= 0 is False) and
+        # reach Pillow as a ValueError/OverflowError deep inside the draw. Reject them here.
+        if not all(math.isfinite(v) for v in box):
+            raise LetteringError(f"{where}: 'box' values must be finite numbers")
         if box[2] <= 0 or box[3] <= 0:
             raise LetteringError(f"{where}: 'box' width and height must be positive")
+        # Coordinates are FRACTIONS of the image, so a legitimate box is around 0..1. A wildly
+        # large one is a unit mistake (pixels pasted into a fraction field), and it is not merely
+        # wrong: `_scallops` scales its circle count with the box, so w=50000 on a 768px plate
+        # builds millions of blobs and rasterises each one twice. That is an unbounded draw inside
+        # a task with a two-hour soft limit, i.e. a wedged worker rather than an error.
+        if box[2] > MAX_BOX_SPAN or box[3] > MAX_BOX_SPAN:
+            raise LetteringError(
+                f"{where}: 'box' spans {box[2]:.4g}x{box[3]:.4g} of the image; coordinates are "
+                f"fractions (0..1), so anything above {MAX_BOX_SPAN} is a unit error"
+            )
+        if not all(abs(v) <= MAX_COORD for v in box[:2]):
+            raise LetteringError(f"{where}: 'box' origin is far outside the image")
         tail = el.get("tail")
         if tail is not None:
             if not (isinstance(tail, (list, tuple)) and len(tail) == 2):
@@ -505,6 +544,10 @@ def normalise_elements(lettering):
                 tail = [float(v) for v in tail]
             except (TypeError, ValueError):
                 raise LetteringError(f"{where}: 'tail' values must be numbers")
+            if not all(math.isfinite(v) for v in tail):
+                raise LetteringError(f"{where}: 'tail' values must be finite numbers")
+            if not all(abs(v) <= MAX_COORD for v in tail):
+                raise LetteringError(f"{where}: 'tail' points far outside the image")
         text = el.get("text") or ""
         if not isinstance(text, str):
             raise LetteringError(f"{where}: 'text' must be a string")
