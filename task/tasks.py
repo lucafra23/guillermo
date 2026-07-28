@@ -56,7 +56,12 @@ def process_task(task_id):
                 f"{traceback.format_exc()}"
             )
             task.set_status(Task.TASK_STATUS_ERROR)
-            if task.retry_attempts < task.retry_max_attempts and hasattr(e, 'status') and e.status in settings.TASK_RETRY_EXCEPTIONS:
+            # getattr, not e.status: only google-genai's APIError carries `.status`. Any other
+            # failure — a ValueError from response handling, an OSError, a bug in a delegate —
+            # raised AttributeError right here, which replaced the real error in the Celery log
+            # with a confusing one and skipped the next_tasks dispatch below.
+            if task.retry_attempts < task.retry_max_attempts \
+                    and getattr(e, 'status', None) in settings.TASK_RETRY_EXCEPTIONS:
                 task.retry_attempts += 1
                 task.retry_countdown += task.retry_countdown + random.randint(0, 5) 
                 task.save(update_fields=['retry_attempts', 'retry_countdown'])

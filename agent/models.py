@@ -12,6 +12,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from agent.utils import wave_file
+from agent.retry import call_with_retry
 from PIL import Image
 from io import BytesIO
 from filer.fields.image import FilerImageField
@@ -530,19 +531,22 @@ class Agent(models.Model):
             contents = prompt_obj.get_contents(generate_self=True, preset=preset)
         out = None
         client = self.get_genai_client(user)
-        response = client.models.generate_content(
-            model=self.agent_model.name,
-            contents=contents['prompt'],
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=contents['voice'],
+        response = call_with_retry(
+            lambda: client.models.generate_content(
+                model=self.agent_model.name,
+                contents=contents['prompt'],
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name=contents['voice'],
+                            )
                         )
-                    )
-                ),
-            )
+                    ),
+                )
+            ),
+            description=f"{self.name} (voice) for {prompt_obj}",
         )
         if not response.candidates:
             finish_reason = getattr(response, 'prompt_feedback', 'No candidates returned, reason unknown.')
@@ -747,10 +751,15 @@ class Agent(models.Model):
         )
 
         with self.get_genai_client(user) as client:
-            response = client.models.generate_content(
-                model=self.agent_model.name,
-                contents=contents,
-                config=config
+            # ONLY the transport call is retried. Everything below this line runs against a
+            # response that has already been paid for, and repeating it would pay again.
+            response = call_with_retry(
+                lambda: client.models.generate_content(
+                    model=self.agent_model.name,
+                    contents=contents,
+                    config=config
+                ),
+                description=f"{self.name} ({self.output_type}) for {obj}",
             )
             self.save_usage(user, response, obj=prompt_obj, preset=preset)
             data = schema_class.model_validate_json(response.text)
