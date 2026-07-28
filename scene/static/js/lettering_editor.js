@@ -20,15 +20,21 @@
 
   function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
+  /* Returns {elements, wrapper}. The wrapper is kept so the documented {"elements": [...]} form
+   * survives a drag: normalise_elements accepts it explicitly "so the field can grow sibling keys
+   * later", and writing back a bare array would silently discard those siblings the moment anyone
+   * moved a balloon. */
   function readJSON(text) {
-    if (!text || !text.trim()) { return []; }
+    if (!text || !text.trim()) { return { elements: [], wrapper: null }; }
     try {
       var parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) { return parsed; }
-      if (parsed && Array.isArray(parsed.elements)) { return parsed.elements; }
-      return [];
+      if (Array.isArray(parsed)) { return { elements: parsed, wrapper: null }; }
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.elements)) {
+        return { elements: parsed.elements, wrapper: parsed };
+      }
+      return { elements: [], wrapper: null };
     } catch (e) {
-      return null; // signals "unparseable": leave the raw text alone rather than destroying it
+      return null; // unparseable: leave the raw text alone rather than destroying it
     }
   }
 
@@ -46,16 +52,31 @@
     this.selected = -1;
 
     var parsed = readJSON(this.textarea.value);
+    this.elements = parsed ? parsed.elements : [];
+    this.wrapper = parsed ? parsed.wrapper : null;
+
+    // Bind FIRST, and bind even when the stored JSON is broken. The previous version returned
+    // before bind(), so the status line told the user to fix it under 'Raw JSON' while the
+    // textarea's change listener did not exist — the advice was impossible to follow without a
+    // page reload, and init() would not retry because dataset.ready was already set.
+    this.bind();
+
     if (parsed === null) {
       this.broken = true;
-      this.say("The stored lettering is not valid JSON. Fix it under 'Raw JSON' to use the editor.", true);
+      this.say("The stored lettering is not valid JSON. Fix it under 'Raw JSON', then it will load here.", true);
       return;
     }
-    this.elements = parsed;
-
-    this.bind();
     this.render();
   }
+
+  /** The single place the model becomes text, so the wrapper cannot be dropped by one code path. */
+  Editor.prototype.serialise = function () {
+    if (this.wrapper) {
+      this.wrapper.elements = this.elements;
+      return JSON.stringify(this.wrapper, null, 2);
+    }
+    return JSON.stringify(this.elements, null, 2);
+  };
 
   Editor.prototype.say = function (message, isError) {
     this.status.textContent = message || "";
@@ -87,7 +108,9 @@
     this.textarea.addEventListener("change", function () {
       var parsed = readJSON(self.textarea.value);
       if (parsed === null) { self.say("Not valid JSON.", true); return; }
-      self.elements = parsed;
+      self.elements = parsed.elements;
+      self.wrapper = parsed.wrapper;
+      self.broken = false;   // recovered: the editor works again without a reload
       self.selected = -1;
       self.render();
       self.say("");
@@ -96,7 +119,7 @@
 
   /** Write the model back to the textarea, then redraw. */
   Editor.prototype.commit = function () {
-    this.textarea.value = JSON.stringify(this.elements, null, 2);
+    this.textarea.value = this.serialise();
     this.render();
   };
 
@@ -128,7 +151,7 @@
       handle.className = "lettering-resize";
       node.appendChild(handle);
 
-      node.addEventListener("mousedown", function (ev) {
+      node.addEventListener("pointerdown", function (ev) {
         if (ev.target === handle) { self.startDrag(ev, i, "resize"); }
         else { self.startDrag(ev, i, "move"); }
       });
@@ -141,19 +164,43 @@
         tail.style.left = (el.tail[0] * 100) + "%";
         tail.style.top = (el.tail[1] * 100) + "%";
         tail.title = el.type + " tail — drag to the speaker's mouth";
-        tail.addEventListener("mousedown", function (ev) { self.startDrag(ev, i, "tail"); });
+        tail.addEventListener("pointerdown", function (ev) { self.startDrag(ev, i, "tail"); });
         self.overlay.appendChild(tail);
       }
     });
+  };
+
+  /* Pick up an un-committed hand-edit before doing anything else.
+   * startDrag calls preventDefault on pointerdown, which suppresses the blur that would have
+   * fired the raw textarea's `change` handler. Without this, typing in Raw JSON and then dragging
+   * without clicking away first threw the typing away, silently — the opposite of the documented
+   * "hand-edits win". */
+  Editor.prototype.syncFromTextarea = function () {
+    if (this.textarea.value === this.serialise()) { return true; }
+    var parsed = readJSON(this.textarea.value);
+    if (parsed === null) {
+      this.say("Raw JSON is not valid, so the drag was ignored. Fix it first.", true);
+      return false;
+    }
+    this.elements = parsed.elements;
+    this.wrapper = parsed.wrapper;
+    this.broken = false;
+    return true;
   };
 
   Editor.prototype.startDrag = function (ev, index, mode) {
     ev.preventDefault();
     ev.stopPropagation();
     var self = this;
+    if (!this.syncFromTextarea()) { return; }
+    if (index >= this.elements.length) { this.render(); return; }
     var rect = this.stage.getBoundingClientRect();
     if (!rect.width || !rect.height) { return; }
     var el = this.elements[index];
+    // Hand-authored elements may omit box/tail entirely. renderBoxes() already tolerates that for
+    // display; without the same defaulting here, the box it drew looked draggable and threw.
+    if (!Array.isArray(el.box)) { el.box = [0.1, 0.1, 0.5, 0.14]; }
+    if (mode === "tail" && !Array.isArray(el.tail)) { el.tail = [0.5, 0.5]; }
     var startX = ev.clientX, startY = ev.clientY;
     var origin = mode === "tail" ? el.tail.slice() : el.box.slice();
     this.selected = index;
@@ -172,18 +219,20 @@
         el.tail[0] = clamp(origin[0] + dx, -0.5, 1.5);
         el.tail[1] = clamp(origin[1] + dy, -0.5, 1.5);
       }
-      self.textarea.value = JSON.stringify(self.elements, null, 2);
+      self.textarea.value = self.serialise();
       self.renderBoxes();
     }
 
     function onUp() {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
       self.commit();
     }
 
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
   };
 
   Editor.prototype.renderList = function () {
@@ -241,7 +290,7 @@
       text.placeholder = el.type === "namecard" ? "NAME|one-line descriptor" : "words on the panel";
       text.addEventListener("input", function () {
         el.text = text.value;
-        self.textarea.value = JSON.stringify(self.elements, null, 2);
+        self.textarea.value = self.serialise();
       });
       text.addEventListener("focus", function () { self.selected = i; self.renderBoxes(); });
       row.appendChild(text);

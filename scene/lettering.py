@@ -484,6 +484,16 @@ def draw_overlay(base_path, elements, out_path):
 MAX_BOX_SPAN = 4.0
 MAX_COORD = 8.0
 
+# Bounding the geometry of ONE element is not enough: compositing cost is linear in the number of
+# elements and in the length of the text, and neither was capped. Measured on a 768x1344 plate,
+# each element costs ~265 ms (two supersampled masks plus two LANCZOS downsizes) and one balloon
+# holding 5,000 words costs ~14 s, because the auto-fit sweeps ~52 font sizes and re-wraps every
+# word at each. A default-sized POST holds ~40,000 elements, which is hours of CPU in a single
+# request — and the container runs gunicorn with `--timeout 0`, so nothing would ever reap it.
+# The densest real page in this book uses well under 20 elements.
+MAX_ELEMENTS = 60
+MAX_TEXT_LENGTH = 2000
+
 
 class LetteringError(ValueError):
     """A lettering spec that cannot be composited."""
@@ -501,6 +511,11 @@ def normalise_elements(lettering):
         lettering = lettering.get("elements", [])
     if not isinstance(lettering, list):
         raise LetteringError("lettering must be a list of elements, or {'elements': [...]}")
+    if len(lettering) > MAX_ELEMENTS:
+        raise LetteringError(
+            f"{len(lettering)} elements is beyond the {MAX_ELEMENTS} this can composite; a panel "
+            f"with that many balloons is a mistake, and compositing cost is linear in the count"
+        )
 
     out = []
     for i, el in enumerate(lettering):
@@ -551,6 +566,12 @@ def normalise_elements(lettering):
         text = el.get("text") or ""
         if not isinstance(text, str):
             raise LetteringError(f"{where}: 'text' must be a string")
+        if len(text) > MAX_TEXT_LENGTH:
+            raise LetteringError(
+                f"{where}: {len(text)} characters is beyond the {MAX_TEXT_LENGTH} this can set; "
+                f"the auto-fit re-wraps the whole string at every candidate size, so cost climbs "
+                f"steeply with length, and no balloon holds this much text legibly anyway"
+            )
         # An empty element is dropped rather than rejected: clearing the words of one balloon
         # while iterating is normal, and should not fail the whole panel.
         if not text.strip():

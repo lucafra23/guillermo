@@ -1,6 +1,9 @@
 import io
+import logging
 import os
 import zipfile
+
+logger = logging.getLogger(__name__)
 
 from django.contrib import admin
 from httpcore import request
@@ -467,8 +470,19 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
 
         if request.method != "POST":
             return JsonResponse({"error": "Method not allowed"}, status=405)
+        if not self.has_change_permission(request):
+            return JsonResponse({"error": "You do not have permission to edit panels."}, status=403)
 
-        action = Action.objects.filter(pk=request.POST.get("action_id")).first()
+        # `filter(pk=...)` is not a validator: a non-numeric id reaches AutoField.get_prep_value
+        # and raises ValueError, which surfaces as a 500 (and, with DEBUG on, a full traceback).
+        try:
+            action_id = int(request.POST.get("action_id") or "")
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Invalid panel id."}, status=400)
+
+        # get_queryset(), not Action.objects: it carries StoryFilterMixin's per-story scoping, so
+        # an author scoped to one story cannot composite against another story's paid plates.
+        action = self.get_queryset(request).filter(pk=action_id).first()
         if action is None:
             return JsonResponse({"error": "Panel not found. Save it once before previewing."}, status=404)
         if not action.image:
@@ -481,13 +495,33 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
         except LetteringError as e:
             return JsonResponse({"error": str(e)}, status=400)
 
-        relative = f"lettering_previews/preview_{action.pk}.png"
+        # Keyed by panel AND user. Keyed on the panel alone, two authors previewing the same panel
+        # shared one path: each saw the other's composite under their own URL, so you could approve
+        # someone else's version of the page — which is precisely the invariant this feature exists
+        # to protect ("what you approve is exactly what ships").
+        relative = f"lettering_previews/preview_{action.pk}_{request.user.pk}.png"
         absolute = os.path.join(_settings.MEDIA_ROOT, relative)
         os.makedirs(os.path.dirname(absolute), exist_ok=True)
+        # Compose to a temp file and move it into place. PIL's save() truncates in place, so a
+        # reader that fetches mid-write gets a half-written PNG; os.replace is atomic on the same
+        # filesystem, so a reader sees either the old file or the new one.
+        # The suffix stays .png: Pillow picks its format from the file extension, so a plain
+        # ".tmp" makes save() raise "unknown file extension".
+        temporary = f"{absolute}.{os.getpid()}.tmp.png"
         try:
-            draw_overlay(action.image.path, elements, absolute)
+            draw_overlay(action.image.path, elements, temporary)
+            os.replace(temporary, absolute)
         except Exception as e:
-            return JsonResponse({"error": f"Could not composite: {e}"}, status=400)
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            # Deliberately not echoing the exception: it is typically an absolute MEDIA_ROOT path.
+            logger.exception("Lettering preview failed for action %s", action.pk)
+            return JsonResponse(
+                {"error": "Could not composite this lettering. Check the server log for details."},
+                status=400,
+            )
 
         return JsonResponse({"url": _settings.MEDIA_URL + relative})
 
