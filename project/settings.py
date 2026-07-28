@@ -479,9 +479,14 @@ TASK_RETRY_EXCEPTIONS = [
 # A rate-limited request produces nothing and costs nothing, so retrying it is free and the
 # only price of getting it wrong is wall-clock. Dropping it loses a panel in the middle of a
 # batch, silently. See agent/retry.py for what is and is not retried.
-GENAI_MAX_RETRIES = int(os.getenv("GENAI_MAX_RETRIES", "5"))
+GENAI_MAX_RETRIES = int(os.getenv("GENAI_MAX_RETRIES", "5"))               # retries AFTER the first try; 0 = try once
 GENAI_RETRY_BASE_DELAY = float(os.getenv("GENAI_RETRY_BASE_DELAY", "30"))   # seconds, doubling
-GENAI_RETRY_MAX_DELAY = float(os.getenv("GENAI_RETRY_MAX_DELAY", "300"))
+GENAI_RETRY_MAX_DELAY = float(os.getenv("GENAI_RETRY_MAX_DELAY", "300"))    # per-wait ceiling
+# Total wall clock a single call may spend waiting. This is the bound that keeps retry safe on the
+# inline path: the admin's generate-image action runs synchronously in the request, and gunicorn
+# runs with `--timeout 0`, so without a total budget a few rate-limited clicks would park every
+# request thread in time.sleep and make the admin unreachable for the length of the backoff.
+GENAI_RETRY_MAX_ELAPSED = float(os.getenv("GENAI_RETRY_MAX_ELAPSED", "600"))
 # Seconds between generation calls in a process. 0 disables pacing. Raise it on a key with a
 # low requests-per-minute ceiling, where not tripping the limit beats recovering from it; with
 # several workers, divide by the worker count.
