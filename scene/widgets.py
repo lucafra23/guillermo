@@ -49,20 +49,19 @@ class LetteringWidget(forms.Widget):
         })
         return context
 
-    def value_from_datadict(self, data, files, name):
-        """Return parsed JSON, or the raw string when it will not parse.
-
-        Handing the raw string back on a parse failure is deliberate: the form field then reports
-        the error and re-renders with what the user had, instead of silently resetting a panel's
-        lettering to empty because one character was mistyped.
-        """
-        raw = data.get(name)
-        if raw in (None, ""):
-            return None
-        try:
-            return json.loads(raw)
-        except (TypeError, ValueError):
-            return raw
+    # NOTE: deliberately NO value_from_datadict override.
+    #
+    # An earlier version parsed the JSON here and returned a Python object. That breaks the admin
+    # in a way no unit test of the method could show: forms.JSONField.bound_data does json.loads()
+    # on whatever this returns, so a list raised TypeError, and BoundField.value() calls bound_data
+    # on EVERY render of a bound form — i.e. every time the admin re-displays the page because
+    # something failed validation. The result was a 500 on any validation error on this form,
+    # including the lettering errors this widget exists to report, with the author's dragged
+    # balloons discarded. A typo in an unrelated field cost the whole edit too.
+    #
+    # Django's own JSONField already does the right thing: it parses in to_python, and on failure
+    # keeps the raw text as InvalidJSONInput so the form re-renders with what the user typed rather
+    # than resetting the panel to empty. The override added nothing.
 
 
 class LetteringFormField(forms.JSONField):
