@@ -475,6 +475,18 @@ TASK_RETRY_EXCEPTIONS = [
     'RESOURCE_EXHAUSTED',
 ]
 
+# --- generation pacing and retry ---------------------------------------------------------
+# A rate-limited request produces nothing and costs nothing, so retrying it is free and the
+# only price of getting it wrong is wall-clock. Dropping it loses a panel in the middle of a
+# batch, silently. See agent/retry.py for what is and is not retried.
+GENAI_MAX_RETRIES = int(os.getenv("GENAI_MAX_RETRIES", "5"))
+GENAI_RETRY_BASE_DELAY = float(os.getenv("GENAI_RETRY_BASE_DELAY", "30"))   # seconds, doubling
+GENAI_RETRY_MAX_DELAY = float(os.getenv("GENAI_RETRY_MAX_DELAY", "300"))
+# Seconds between generation calls in a process. 0 disables pacing. Raise it on a key with a
+# low requests-per-minute ceiling, where not tripping the limit beats recovering from it; with
+# several workers, divide by the worker count.
+GENAI_MIN_CALL_INTERVAL = float(os.getenv("GENAI_MIN_CALL_INTERVAL", "0"))
+
 # --- Configuración de archivos estáticos ---
 import os
 STATIC_URL = 'static/'
