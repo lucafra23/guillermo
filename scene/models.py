@@ -703,7 +703,78 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
         image_agent = Agent.objects.filter(output_type=Agent.OUTPUT_TYPE_IMAGE).first()
         out = image_agent.generate(self, preset=self.PRESET_COMIC, user=user)
         return out
-    
+
+    def letter(self, user=None):
+        """Composite `lettering` onto `image`, writing the result to `image_comic`.
+
+        Free and deterministic: no model call, no spend, and `image` is never touched. This is
+        the loop that makes text editable — change a caption, re-letter, keep the art. Compare
+        with `generate_comic()`, which asks the image model to draw the words and therefore
+        garbles exact text and returns different art every time.
+
+        Returns the new `image_comic`, or None when the panel has no lettering (in which case
+        any stale composite is cleared, so readers fall back to the bare plate via `intro()`).
+        """
+        import os
+        import random
+
+        from django.utils.text import slugify
+        from filer.models.imagemodels import Image as FilerImage
+
+        from .lettering import LetteringError, draw_overlay, normalise_elements
+
+        if not self.image:
+            raise LetteringError(
+                f"Action {self.id} ({self.name!r}) has no image to letter. Generate the plate first."
+            )
+
+        elements = normalise_elements(self.lettering)
+        previous = self.image_comic
+
+        if not elements:
+            # No words: drop any stale composite rather than leaving last edit's text on screen.
+            if previous:
+                self.image_comic = None
+                self.save(update_fields=["image_comic"])
+                self._discard_composite(previous)
+            return None
+
+        name = (
+            f"lettered_{slugify(self.name) or self.id}_{self.id}_{random.randint(1000, 9999)}.png"
+        )
+        relative = f"action_lettered/{name}"
+        absolute = os.path.join(settings.MEDIA_ROOT, relative)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+
+        draw_overlay(self.image.path, elements, absolute)
+
+        out = FilerImage.objects.create(
+            original_filename=name,
+            file=relative,
+            name=name,
+        )
+        self.image_comic = out
+        self.save(update_fields=["image_comic"])
+
+        # A composite is a derived artifact, cheap to rebuild, so the superseded one is removed
+        # rather than orphaned in filer. This is the opposite of the rule for `image`, which is
+        # paid for and must never be discarded (see the plate-history work).
+        self._discard_composite(previous)
+        return out
+
+    @staticmethod
+    def _discard_composite(filer_image):
+        """Delete a superseded lettering composite, ignoring anything still referencing it."""
+        if not filer_image:
+            return
+        try:
+            if Action.objects.filter(image_comic=filer_image).exists():
+                return
+            filer_image.delete()
+        except Exception:  # a missing file or a lingering reference must not fail the letter pass
+            pass
+
+
     def intro(self):
         out = None
         if self.image_comic:

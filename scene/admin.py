@@ -404,7 +404,7 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
     search_fields = ['name']
-    actions = ['generate_comic', 'comic_to_video']
+    actions = ['letter_action', 'generate_comic', 'comic_to_video']
     fieldsets = ACTION_FIELDSETS
 
 

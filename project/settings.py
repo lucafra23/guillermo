@@ -423,6 +423,17 @@ TASK_TYPE_GENERATE_SCENE_ACTIONS = 'generate_scene_actions'
 TASK_TYPE_EXTRACT_SCENE = 'extract_scene'
 TASK_TYPE_SYNC_EXPORT = 'sync_export'
 TASK_TYPE_SYNC_IMPORT = 'sync_import'
+TASK_TYPE_LETTER_ACTION = 'letter_action'
+
+# --- lettering (graphic-novel text compositing) -----------------------------------------
+# Font FACES are deployment-supplied and never vendored: comic lettering faces are commonly
+# licensed for use but not for redistribution inside another product. Point LETTERING_FONT_DIR
+# at a directory holding the two faces below. Unset, lettering still works but falls back to
+# DejaVu and logs a warning — the geometry is identical, the letterforms are not, so a book
+# half-lettered either side of that change will not match itself.
+LETTERING_FONT_DIR = os.getenv("LETTERING_FONT_DIR")
+LETTERING_FONT_BOLD = os.getenv("LETTERING_FONT_BOLD", "KOMTXTB_.ttf")
+LETTERING_FONT_REGULAR = os.getenv("LETTERING_FONT_REGULAR", "KOMTXT__.ttf")
 
 
 
@@ -443,6 +454,8 @@ TASK_DELEGATES = {
     TASK_TYPE_GENERATE_SCENE_ACTIONS: 'scene.tasks.tasks.TaskGenerateShots',
 
     TASK_TYPE_EXTRACT_SCENE: 'scene.tasks.tasks.TaskExtractScene',
+    # lettering
+    TASK_TYPE_LETTER_ACTION: 'scene.tasks.tasks.TaskLetterAction',
     # sync
     TASK_TYPE_SYNC_EXPORT: 'scene.tasks.sync.TaskSyncExport',
     TASK_TYPE_SYNC_IMPORT: 'scene.tasks.sync.TaskSyncImport',
