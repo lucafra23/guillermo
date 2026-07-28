@@ -1,0 +1,75 @@
+/* Lettering editor. Deliberately plain: it sits inside the Unfold admin, so it borrows the page's
+   own colours where it can and only asserts what it must to stay legible over arbitrary artwork. */
+
+.lettering-editor { margin: 0.5rem 0 1rem; font-size: 0.85rem; }
+
+.lettering-toolbar {
+  display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.5rem;
+}
+.lettering-toolbar select, .lettering-toolbar button {
+  padding: 0.3rem 0.6rem; border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 4px; background: transparent; color: inherit; cursor: pointer;
+}
+.lettering-toolbar button:hover { border-color: currentColor; }
+.lettering-status { opacity: 0.75; }
+.lettering-status.is-error { color: #d33; opacity: 1; font-weight: 600; }
+
+.lettering-body { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
+
+/* The stage is the coordinate space: everything inside is positioned in percentages, so the
+   editor is resolution-independent exactly like the stored spec. */
+.lettering-stage {
+  position: relative; flex: 1 1 380px; max-width: 560px;
+  background: #111; border: 1px solid rgba(128, 128, 128, 0.4); border-radius: 4px;
+  overflow: hidden; user-select: none;
+}
+.lettering-plate { display: block; width: 100%; height: auto; }
+.lettering-plate-missing { padding-top: 150%; background: repeating-linear-gradient(
+  45deg, #1a1a1a, #1a1a1a 10px, #222 10px, #222 20px); }
+.lettering-overlay { position: absolute; inset: 0; }
+
+.lettering-box {
+  position: absolute; border: 1px dashed rgba(80, 220, 255, 0.9);
+  background: rgba(80, 220, 255, 0.12); cursor: move; box-sizing: border-box;
+}
+.lettering-box.is-selected {
+  border-color: #ffd24a; background: rgba(255, 210, 74, 0.18); border-style: solid;
+}
+.lettering-box-label {
+  position: absolute; top: -1.1rem; left: 0; font-size: 0.65rem; line-height: 1;
+  padding: 1px 4px; background: rgba(0, 0, 0, 0.75); color: #fff; border-radius: 2px;
+  white-space: nowrap; pointer-events: none;
+}
+.lettering-resize {
+  position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px;
+  background: #ffd24a; border: 1px solid #333; border-radius: 2px; cursor: nwse-resize;
+}
+/* The tail marker is the speaker's mouth, so it is a point, not a box. Offset by half its size
+   so the visual centre really is the stored coordinate. */
+.lettering-tail {
+  position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  border-radius: 50%; background: rgba(80, 220, 255, 0.9);
+  border: 2px solid #06232c; cursor: crosshair;
+}
+.lettering-tail.is-selected { background: #ffd24a; }
+
+.lettering-list { flex: 1 1 300px; max-width: 460px; display: flex; flex-direction: column; gap: 0.5rem; }
+.lettering-row {
+  border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 4px; padding: 0.5rem;
+}
+.lettering-row.is-selected { border-color: #ffd24a; }
+.lettering-row-head { display: flex; gap: 0.5rem; margin-bottom: 0.35rem; }
+.lettering-row-head select { flex: 1; padding: 0.2rem; background: transparent; color: inherit;
+  border: 1px solid rgba(128, 128, 128, 0.5); border-radius: 3px; }
+.lettering-delete { border: 1px solid rgba(200, 60, 60, 0.6); color: #d33; background: transparent;
+  border-radius: 3px; padding: 0.2rem 0.5rem; cursor: pointer; }
+.lettering-text { width: 100%; box-sizing: border-box; padding: 0.35rem; font: inherit;
+  background: transparent; color: inherit; border: 1px solid rgba(128, 128, 128, 0.4); border-radius: 3px; }
+
+.lettering-empty { opacity: 0.7; font-style: italic; margin: 0.25rem 0; }
+.lettering-raw { margin-top: 0.75rem; }
+.lettering-raw summary { cursor: pointer; opacity: 0.75; }
+.lettering-json { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace;
+  font-size: 0.75rem; margin-top: 0.4rem; }
+
+@media (max-width: 760px) { .lettering-body { flex-direction: column; } }
