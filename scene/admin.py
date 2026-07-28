@@ -13,6 +13,8 @@ from task.models import Task
 from unfold.admin import StackedInline
 from .models import ActionOrganizer, Character, Scene, Action, Background, SceneOrganizer, StoryGroup, Style, Prop, ComicAction, RenderItem, VideoAction, Render, Story, StoryProfile, Voice, VoiceAction, Author, Nudge, ContactRequest, WorkShop, Sync, SyncItem
 from .admin_utils import AjaxTaskModelAdmin, AdminLinker, handle_ajax_field_save
+from django import forms
+from .widgets import LetteringFormField, LetteringWidget
 from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
 from .sections import AuthorSection, SceneSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection, MessageHistorySection, MarkDownSection
@@ -395,9 +397,37 @@ class VideoActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     fieldsets = ACTION_FIELDSETS
 
 
+class LetteringAdminForm(forms.ModelForm):
+    """Swaps the raw JSON box for the visual editor, and validates through the compositor."""
+
+    class Meta:
+        model = ComicAction
+        fields = "__all__"
+        field_classes = {"lettering": LetteringFormField}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields.get("lettering")
+        if not field:
+            return
+        instance = getattr(self, "instance", None)
+        plate_url = ""
+        if instance and instance.pk and instance.image:
+            try:
+                plate_url = instance.image.url
+            except Exception:
+                plate_url = ""
+        field.widget = LetteringWidget(
+            plate_url=plate_url,
+            preview_url=reverse("admin:scene_lettering_preview"),
+            action_id=instance.pk if instance and instance.pk else "",
+        )
+
+
 @admin.register(ComicAction)
 class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
     ajax_shift_fields = ['prompt_comic']
+    form = LetteringAdminForm
     list_display = ('name', 'items', 'pic', 'pic_comic', 'prompt_comic', 'last_tasks')
     list_editable = ['prompt_comic']
     list_filter = ["scene__story", "scene", "id"]
@@ -406,6 +436,60 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     search_fields = ['name']
     actions = ['letter_action', 'generate_comic', 'comic_to_video']
     fieldsets = ACTION_FIELDSETS
+
+    def get_urls(self):
+        urls = super().get_urls()
+        return [
+            path(
+                'lettering-preview/',
+                self.admin_site.admin_view(self.lettering_preview_view),
+                name='scene_lettering_preview',
+            ),
+        ] + urls
+
+    def lettering_preview_view(self, request):
+        """Composite a candidate spec and return its URL. Saves nothing.
+
+        The preview runs through the SAME compositor as the real letter pass, because an
+        approximation would defeat the purpose: the reason lettering is composited rather than
+        drawn by the image model is that what you approve has to be exactly what ships.
+
+        Nothing here touches the Action: not `image` (paid art), not `image_comic` (which would
+        make an unsaved experiment look committed), not `lettering`. The output goes to a path
+        keyed by action id and is overwritten by the next preview.
+        """
+        import json as _json
+        import os
+
+        from django.conf import settings as _settings
+
+        from .lettering import LetteringError, draw_overlay, normalise_elements
+
+        if request.method != "POST":
+            return JsonResponse({"error": "Method not allowed"}, status=405)
+
+        action = Action.objects.filter(pk=request.POST.get("action_id")).first()
+        if action is None:
+            return JsonResponse({"error": "Panel not found. Save it once before previewing."}, status=404)
+        if not action.image:
+            return JsonResponse({"error": "This panel has no image yet — generate the plate first."}, status=400)
+
+        try:
+            elements = normalise_elements(_json.loads(request.POST.get("lettering") or "[]"))
+        except (TypeError, ValueError) as e:
+            return JsonResponse({"error": f"Lettering is not valid JSON: {e}"}, status=400)
+        except LetteringError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+        relative = f"lettering_previews/preview_{action.pk}.png"
+        absolute = os.path.join(_settings.MEDIA_ROOT, relative)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+        try:
+            draw_overlay(action.image.path, elements, absolute)
+        except Exception as e:
+            return JsonResponse({"error": f"Could not composite: {e}"}, status=400)
+
+        return JsonResponse({"url": _settings.MEDIA_URL + relative})
 
 
 @admin.register(VoiceAction)
