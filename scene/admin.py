@@ -444,7 +444,9 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
     search_fields = ['name', 'text']
-    actions = ['letter_action', 'generate_comic', 'comic_to_video', 'bulk_edit_text']
+    # Ordered as the authoring loop runs: place the words, letter them, then the paid step.
+    actions = ['bulk_edit_text', 'suggest_placement', 'letter_action',
+               'generate_comic', 'comic_to_video']
     fieldsets = ACTION_FIELDSETS
 
     def get_urls(self):
