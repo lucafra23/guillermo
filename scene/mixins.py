@@ -360,6 +360,99 @@ class AdminActionsMixin:
             obj.set_image_keeping_previous(obj.image_refine)
             self.message_user(request, "image accepted for item ID {}.".format(obj.id))
 
+    @admin.action(description="Check plates for a baked letterbox band")
+    def check_letterbox_matte(self, request, queryset):
+        """Report only. Writes nothing, spends nothing.
+
+        Separate from the repair on purpose: the detector's failure mode is repainting real art
+        (a pale sky, a plain wall), so the operator gets to see what it proposes before it acts.
+        """
+        from .plate_repair import MAX_FRAC, analyse_matte
+
+        found = manual = clean = 0
+        for obj in queryset:
+            if not obj.image:
+                continue
+            try:
+                _h, _w, bands, skip = analyse_matte(obj.image.path)
+            except Exception as e:
+                self.message_user(request, f"{obj}: could not be read ({e}).", level=messages.WARNING)
+                continue
+            if any(skip.values()):
+                manual += 1
+                sides = ", ".join(k for k, v in skip.items() if v)
+                self.message_user(
+                    request,
+                    f"{obj}: a flat light area covers more than {MAX_FRAC:.0%} of the "
+                    f"{sides} axis. That is more likely to be the picture than a band, so it is "
+                    f"left for you to judge.",
+                    level=messages.WARNING)
+            elif any(bands.values()):
+                found += 1
+                sides = ", ".join(f"{k} {v}px" for k, v in bands.items() if v)
+                self.message_user(request, f"{obj}: repairable band - {sides}.", level=messages.INFO)
+            else:
+                clean += 1
+        self.message_user(
+            request,
+            f"{found} plate(s) with a repairable band, {manual} needing a human decision, "
+            f"{clean} clean. Nothing was changed.",
+            level=messages.SUCCESS)
+
+    @admin.action(description="Repair baked letterbox band (free)")
+    def repair_letterbox_matte(self, request, queryset):
+        """Repaint the band to the page background. No generation, no spend.
+
+        The previous plate is kept, so this is undoable with "Revert to previous plate". Dimensions
+        are preserved: lettering coordinates are fractions, so a crop would move every balloon on
+        the panel.
+        """
+        import os
+
+        from django.conf import settings as dj_settings
+        from filer.models.imagemodels import Image as FilerImage
+
+        from .plate_repair import analyse_matte, repair_matte
+
+        repaired = skipped = 0
+        for obj in queryset:
+            if not obj.image:
+                continue
+            try:
+                _h, _w, bands, _skip = analyse_matte(obj.image.path)
+            except Exception as e:
+                self.message_user(request, f"{obj}: could not be read ({e}).", level=messages.WARNING)
+                continue
+            if not any(bands.values()):
+                skipped += 1
+                continue
+            name = f"repaired_{obj.pk}_{secrets.token_hex(3)}.png"
+            relative = f"repaired_plates/{name}"
+            absolute = os.path.join(dj_settings.MEDIA_ROOT, relative)
+            os.makedirs(os.path.dirname(absolute), exist_ok=True)
+            try:
+                repair_matte(obj.image.path, absolute, bands)
+                out = FilerImage.objects.create(
+                    original_filename=name, file=relative, name=name)
+            except Exception as e:
+                # Never leave a file on disk that no row references.
+                try:
+                    os.remove(absolute)
+                except OSError:
+                    pass
+                self.message_user(request, f"{obj}: repair failed ({e}).", level=messages.ERROR)
+                continue
+            obj.set_image_keeping_previous(out)
+            repaired += 1
+            sides = ", ".join(f"{k} {v}px" for k, v in bands.items() if v)
+            self.message_user(request, f"{obj}: repainted {sides}.", level=messages.INFO)
+        self.message_user(
+            request,
+            f"Repaired {repaired} plate(s) for free; {skipped} had nothing to repair. "
+            f"The originals are kept - use 'Revert to previous plate' to undo. "
+            f"Re-letter to refresh the composited pages.",
+            level=messages.SUCCESS)
+
     @admin.action(description="Revert to previous plate")
     def revert_to_previous_image(self, request, queryset):
         """Undo the last image replacement on the selected rows."""
