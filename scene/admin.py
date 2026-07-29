@@ -2,7 +2,8 @@ import io
 import os
 import zipfile
 
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.template.response import TemplateResponse
 from httpcore import request
 from unfold.admin import ModelAdmin
 from django.urls import path
@@ -333,15 +334,53 @@ class VideoActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
 @admin.register(ComicAction)
 class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
     ajax_shift_fields = ['prompt_comic']
-    list_display = ('name', 'items', 'pic', 'pic_comic', 'prompt_comic', 'last_tasks')
-    list_editable = ['prompt_comic']
+    # `text` is the words that end up on the page, and it is edited far more often than anything
+    # else here: a typical revision pass is twenty-odd caption and bubble rewrites at once. One
+    # change form per panel makes that a chore that gets skipped, which shows up as a worse book.
+    list_display = ('name', 'items', 'pic', 'pic_comic', 'text', 'prompt_comic', 'last_tasks')
+    list_editable = ['text', 'prompt_comic']
     list_filter = ["scene__story", "scene", "id"]
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
-    search_fields = ['name']
-    actions = ['letter_action', 'generate_comic', 'comic_to_video']
+    search_fields = ['name', 'text']
+    actions = ['letter_action', 'generate_comic', 'comic_to_video', 'bulk_edit_text']
     list_sections = [MessageHistorySection]
     fieldsets = ACTION_FIELDSETS
+
+    @admin.action(description="Bulk edit text")
+    def bulk_edit_text(self, request, queryset):
+        """Edit the words on many panels in one form, with the plate beside each one.
+
+        The changelist can already edit `text` inline, but it shows one line per row and no art.
+        Dialogue is written against the picture: the question is never "is this line good" but
+        "does this line fit THAT panel", so the plate has to be visible while you type.
+        """
+        actions = list(queryset.select_related("scene").order_by("scene__order", "order", "id"))
+        if request.POST.get("bulk_text_submit"):
+            changed = 0
+            for action in actions:
+                field = f"text_{action.pk}"
+                if field not in request.POST:
+                    continue
+                new = request.POST[field]
+                if new != (action.text or ""):
+                    action.text = new
+                    action.save(update_fields=["text"])
+                    changed += 1
+            self.message_user(
+                request,
+                f"Updated the text on {changed} panel(s)." if changed else "No text changed.",
+                level=messages.SUCCESS if changed else messages.INFO)
+            return None
+        return TemplateResponse(request, "admin/bulk_edit_text.html", {
+            **self.admin_site.each_context(request),
+            "title": "Bulk edit text",
+            "queryset": queryset,
+            "actions_to_edit": actions,
+            "action_name": "bulk_edit_text",
+            "opts": self.model._meta,
+            "media": self.media,
+        })
 
 
 @admin.register(VoiceAction)
