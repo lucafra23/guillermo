@@ -36,10 +36,12 @@ that does not change this render until "Refresh Render" runs again.
 import base64
 import html
 import io
+import traceback
 
 from django.core.files.base import ContentFile
 from django.utils.text import slugify
 from filer.models.filemodels import File as FilerFile
+from filer.models.foldermodels import Folder as FilerFolder
 from PIL import Image as PILImage
 
 from task.models import Task
@@ -54,8 +56,12 @@ PORTABLE_JPEG_QUALITY = 78
 MIN_WIDTH, MAX_WIDTH = 64, 5000
 MIN_QUALITY, MAX_QUALITY = 1, 95
 
-# Our own output. Used to decide whether a superseded document is ours to delete.
-DOC_SUFFIXES = ("_reader.html", "_portable.html")
+# Generated documents live in a filer folder of their own, and that membership - not the filename -
+# is what marks a file as ours to delete. An earlier version of this sniffed the filename, which
+# meant a file someone uploaded by hand and happened to name "notes_reader.html" was destroyed on
+# the next render. Ownership has to be something the renderer establishes, not something a name
+# coincidentally matches.
+DOCUMENT_FOLDER_NAME = "Render documents"
 
 
 class ComicRenderError(Exception):
@@ -172,6 +178,27 @@ def build_reader_html(render, pages, task=None):
     return "".join(parts), used
 
 
+def _storage_supports_paths(pages):
+    """Can the media backend hand us local filesystem paths at all?
+
+    Asked of the STORAGE, not of a row: Django's Storage.path raises NotImplementedError on
+    backends that have no local files, which is the real signal. A row whose own file is missing
+    tells us nothing about the backend.
+    """
+    for _order, _label, image in pages:
+        storage = getattr(getattr(image, "file", None), "storage", None)
+        if storage is None:
+            continue
+        try:
+            storage.path("probe")
+            return True
+        except NotImplementedError:
+            return False
+        except Exception:
+            return True  # a path was computable; it just failed on something else
+    return True
+
+
 def build_portable_html(render, pages, max_width=PORTABLE_MAX_WIDTH,
                         quality=PORTABLE_JPEG_QUALITY, task=None):
     """One self-contained file: every page downscaled and embedded, no server required.
@@ -181,18 +208,28 @@ def build_portable_html(render, pages, max_width=PORTABLE_MAX_WIDTH,
     """
     title = render.name or "Untitled"
     parts = [_document_head(title), "<main>"]
+    # Whether the BACKEND can produce local paths is a property of the storage, asked once. filer's
+    # File.path is a bare `except: return ''`, which returns '' both for a remote backend AND for a
+    # single row with an empty file field - so treating any empty path as "this is S3" let one bad
+    # row out of 484 abort the whole book and blame the wrong thing.
+    if not _storage_supports_paths(pages):
+        raise ComicRenderError(
+            "The media storage backend does not expose local file paths, which the portable "
+            "export needs in order to embed the art. Use the reader output instead "
+            "(Render.config {\"portable\": false})."
+        )
+
     embedded, failures, first_error = 0, 0, None
     for order, label, image in pages:
-        # filer's File.path is also a bare `except: return ''`. It returns '' for any storage
-        # backend without local paths (S3 and friends), where PIL would then fail on every single
-        # page. Report that once, as itself, rather than 484 identical per-page failures.
         path = image.path
         if not path:
-            raise ComicRenderError(
-                "The media storage backend does not expose local file paths, which the portable "
-                "export needs in order to embed the art. Use the reader output instead "
-                "(Render.config {\"portable\": false})."
-            )
+            # An individual row with no usable file: a per-page problem like any other.
+            failures += 1
+            if first_error is None:
+                first_error = "the filer row has no file attached"
+            if task:
+                task.log(f"Page {order} ({label}) has no file attached and was left out.")
+            continue
         try:
             with PILImage.open(path) as im:
                 im = im.convert("RGB")
@@ -224,15 +261,21 @@ def build_portable_html(render, pages, max_width=PORTABLE_MAX_WIDTH,
     return "".join(parts), embedded
 
 
+def _document_folder():
+    """The filer folder generated documents are written to, created on first use."""
+    folder, _ = FilerFolder.objects.get_or_create(name=DOCUMENT_FOLDER_NAME, parent=None)
+    return folder
+
+
 def _is_our_document(filer_file):
     """True when this row is a document THIS renderer wrote.
 
-    A render document is generated HTML, never paid art, so the catastrophic case that
-    `Action._discard_composite` guards against (deleting a plate that two fields happen to share)
-    cannot arise here. Still checked by name, so a document attached by hand is left alone.
+    Membership of the generated-documents folder, not the filename. A name is a coincidence a user
+    can stumble into; a folder is somewhere the renderer put the file.
     """
-    name = (getattr(filer_file, "original_filename", "") or "")
-    return name.endswith(DOC_SUFFIXES)
+    if filer_file is None or filer_file.folder_id is None:
+        return False
+    return filer_file.folder_id == _document_folder().pk
 
 
 def _discard_document(filer_file):
@@ -262,6 +305,7 @@ def _attach(render, filename, text):
         original_filename=filename,
         file=ContentFile(text.encode("utf-8"), name=filename),
         name=filename,
+        folder=_document_folder(),
     )
     try:
         render.document = out
@@ -293,7 +337,12 @@ class ComicRender:
             # (scene/tasks/tasks.py): the runner's handler does `e.status in TASK_RETRY_EXCEPTIONS`
             # and a plain ValueError has no `.status`, so re-raising turns a clear message into an
             # AttributeError inside an except block and skips the runner's next_tasks dispatch.
-            self.task.log(f"Comic render failed: {type(e).__name__}: {e}")
+            #
+            # The traceback is logged HERE because not re-raising means the runner never logs one.
+            # Swallowing a MemoryError from the 91 MB build, or a DatabaseError, as a single line
+            # of text would trade one debugging problem for a worse one.
+            self.task.log(
+                f"Comic render failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
             self.task.set_status(Task.TASK_STATUS_ERROR)
             return None
 

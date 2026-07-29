@@ -81,7 +81,11 @@ class ModelDisplayMixin:
         # file is produced successfully and is reachable only through Filer's unfiled-files admin.
         document = getattr(self, 'document', None)
         if document and document.url:
-            return format_html('<a href="{}" download >{}</a>', document.url, _("Download"))
+            # Opened, not downloaded. The reader output references media by server-relative URL, so
+            # a downloaded copy is a page of broken images unless it is read from this server. The
+            # portable output is the one built to survive being saved somewhere else.
+            return format_html('<a href="{}" target="_blank" rel="noopener">{}</a>',
+                               document.url, _("Open"))
         return _("No Document")
     document_download.short_description = _("Document Download")
 

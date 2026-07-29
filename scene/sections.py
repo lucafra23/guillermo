@@ -243,7 +243,10 @@ class RenderSection(AjaxSection):
         content_type = get_object_or_404(ContentType, pk=content_type_id)
         model_class = content_type.model_class()
         instance = get_object_or_404(model_class, pk=object_id)
-        html = render_to_string("sections/scene_renders_items.html", {"renders": instance.renders.all()})
+        # The card template tests `render.video` and `render.document`; without select_related
+        # each render with either costs its own query to draw one row.
+        renders = instance.renders.all().select_related("video", "document")
+        html = render_to_string("sections/scene_renders_items.html", {"renders": renders})
         return JsonResponse({"html": html})
 
     def get_context_data(self, request, instance):
