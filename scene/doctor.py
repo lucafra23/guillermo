@@ -31,47 +31,55 @@ import re
 
 from django.db.models import Count
 
-# Phrases that must never reach the IMAGE agent on a comic story. Each one asks a text-free
-# renderer to letter. This list is scar tissue: it is the wording that actually caused the
-# 2026-07-24 incident, not a guess at what might.
+# IMPERATIVE phrases: wording that only makes sense as an order to draw text. These are matched
+# without any negation analysis, because they do not occur in a "do not do this" clause naturally.
+#
+# Bare NOUNS ("speech bubble", "caption box") are deliberately NOT here. They appear in the cure as
+# often as the disease - the 2026-07-24 fix reads "Draw no speech bubbles, thought clouds, caption
+# boxes or lettering of any kind" - and the clause-scoped negation check that used to compensate
+# was wrong in both directions: it suppressed "Do not omit the caption box" (a real draw order,
+# since the prompts are comma-joined lists of "NO ..." clauses) and it fired on "Speech bubbles:
+# never draw them". Grepping for a disease that shares its vocabulary with the cure cannot be made
+# reliable, so that whole mechanism is gone. `require_text_free_assertion` below carries the weight
+# instead: it demands the cure rather than hunting every spelling of the disease.
 LETTERING_DIRECTIVES = [
     "letter it into",
     "render legible text",
     "legible and well-placed",
     "exact text match",
     "render bubbles and captions",
-    "into the panel",
     "gilded plaque",
     "monospace helpdesk card",
-    "speech bubble",
-    "caption box",
-    "thought cloud",
+    "write the dialogue",
+    "bake the chapter title",
+    "hand-drawn lettering",
+    "readable signage",
+    "crisp typography",
 ]
 
-# The same nouns appear in the CURE as in the disease. The fix for the 2026-07-24 incident was to
-# add "Draw no speech bubbles, thought clouds, caption boxes or lettering of any kind" to the
-# prompts - so a naive substring match flags the negative clause and reports the correctly
-# configured story as broken. That is not a cosmetic bug: a validator that fires on a healthy book
-# is one you learn to skip, which is how the original drift survived a review in the first place.
-#
-# So a hit only counts when it is NOT negated within its own clause. Clause, not whole prompt:
-# "never draw a bubble. Render legible text" must still be caught.
-NEGATION_CUES = (
-    "no ", "not ", "never", "without", "avoid", "don't", "do not", "free of",
-    "excluding", "omit", "refrain", "must not", "text-free",
-)
+# Wording that asserts the panel is delivered without words. A comic story whose image instructions
+# contain NONE of these is not configured for text-free art, whatever else they say.
+TEXT_FREE_ASSERTIONS = [
+    "text-free",
+    "text free",
+    "no text",
+    "never draw words",
+    "draw no words",
+    "without any text",
+    "no lettering",
+    "draw no speech bubbles",
+]
 
-_CLAUSE_BREAK = re.compile(r"[.;:\n]")
-
-
-def _clause_before(text_lower, start):
-    """The text from the previous clause break up to the match."""
-    breaks = [m.end() for m in _CLAUSE_BREAK.finditer(text_lower, 0, start)]
-    return text_lower[(breaks[-1] if breaks else 0):start]
+_WS = re.compile(r"[\s\-]+")
 
 
-def _is_negated(text_lower, start):
-    return any(cue in _clause_before(text_lower, start) for cue in NEGATION_CUES)
+def _normalised(text):
+    """Lowercased with runs of whitespace and hyphens flattened to one space.
+
+    Without this, "speech-bubble", "speech  bubble" and "speech\\nbubble" all slip a phrase match -
+    and the Writer prompt in this very database says "speech-bubble placement".
+    """
+    return _WS.sub(" ", (text or "").lower())
 
 # Below this, a prompt cannot direct an image well enough to be worth paying for. Chosen from the
 # real corpus: genuine panel prompts in this book run 400-2000 characters, and the rows that came
@@ -122,23 +130,65 @@ class Finding:
 
 
 def _matched_directives(text):
-    """Directives that appear as an INSTRUCTION TO DRAW, ignoring the ones being forbidden."""
-    lowered = (text or "").lower()
-    hits = []
-    for directive in LETTERING_DIRECTIVES:
-        for match in re.finditer(re.escape(directive), lowered):
-            if not _is_negated(lowered, match.start()):
-                hits.append(directive)
-                break
-    return hits
+    """Imperative lettering directives present in this text."""
+    lowered = _normalised(text)
+    return [d for d in LETTERING_DIRECTIVES if _normalised(d) in lowered]
+
+
+def image_instruction_sources(story):
+    """[(label, prompt_object)] for EVERY prompt that reaches an image generation.
+
+    `agent.instructions` is only one of four channels. `Agent.get_instructions` returns
+    `self.instructions.all() + Prompt.instructions(preset, obj)`, and that second call adds every
+    global Prompt matching the preset, every global Prompt matching the object's ContentType, and
+    the Scene's own `instructions` - all appended in the same last position that caused the
+    2026-07-24 incident.
+
+    Reading only the M2M made this validator blind to the channel most likely to carry the next
+    one. The prompt that CAUSED that incident is still in this database, detached from every agent
+    with `category='comic'`; setting `is_global=True` on it - one checkbox - re-arms it, and the
+    old check reported the story safe.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    from agent.models import Agent, Prompt
+
+    from .models import Action
+
+    out = []
+    for agent in Agent.objects.filter(output_type=Agent.OUTPUT_TYPE_IMAGE).prefetch_related("instructions"):
+        for prompt in agent.instructions.all():
+            out.append((f"image agent {agent.name!r}", prompt))
+
+    for prompt in Prompt.objects.filter(is_global=True):
+        out.append(("global prompt", prompt))
+
+    try:
+        ct = ContentType.objects.get_for_model(Action)
+        for prompt in Prompt.objects.filter(content_types=ct):
+            out.append(("prompt bound to Action", prompt))
+    except Exception:
+        pass
+
+    for scene in story.scenes.all().prefetch_related("instructions"):
+        for prompt in scene.instructions.all():
+            out.append((f"scene {scene} instructions", prompt))
+
+    seen, unique = set(), []
+    for label, prompt in out:
+        if prompt.pk in seen:
+            continue
+        seen.add(prompt.pk)
+        unique.append((label, prompt))
+    return unique
 
 
 def check_image_agents_do_not_letter(story):
-    """The 2026-07-24 failure mode itself.
+    """The 2026-07-24 failure mode itself, across every channel that reaches an image call.
 
     Only meaningful for a comic story: on a film, an image agent drawing a title card is fine.
-    Guillermo appends agent instructions AFTER the panel prompt, so an instruction here overrides
-    a per-panel "no text" clause rather than being overridden by it.
+    Guillermo appends instructions AFTER the panel prompt, so anything here overrides a per-panel
+    "no text" clause rather than being overridden by it.
     """
     from agent.models import Agent
 
@@ -146,24 +196,46 @@ def check_image_agents_do_not_letter(story):
     if not story.is_comic:
         return findings
 
-    agents = Agent.objects.filter(output_type=Agent.OUTPUT_TYPE_IMAGE).prefetch_related("instructions")
-    if not agents.exists():
+    if not Agent.objects.filter(output_type=Agent.OUTPUT_TYPE_IMAGE).exists():
         findings.append(Finding(
             WARN, "no-image-agent",
             "No agent with output type 'image' is configured, so nothing can draw a panel."))
         return findings
 
-    for agent in agents:
-        for prompt in agent.instructions.all():
-            hits = _matched_directives(prompt.prompt)
-            if hits:
-                findings.append(Finding(
-                    FAIL, "image-agent-letters",
-                    f"Image agent {agent.name!r} carries instruction {prompt.name!r}, which tells "
-                    f"it to draw text: {', '.join(repr(h) for h in hits)}. Guillermo appends this "
-                    f"AFTER the panel prompt, so it overrides any 'no text' clause and the words "
-                    f"are baked into the art. Move it to the text agent or delete it.",
-                    obj=prompt))
+    for label, prompt in image_instruction_sources(story):
+        hits = _matched_directives(prompt.prompt)
+        if hits:
+            findings.append(Finding(
+                FAIL, "image-agent-letters",
+                f"{label} carries instruction {prompt.name!r}, which tells the renderer to draw "
+                f"text: {', '.join(repr(h) for h in hits)}. This is appended AFTER the panel "
+                f"prompt, so it overrides any 'no text' clause and the words are baked into the "
+                f"art. Move it to the text agent or delete it.",
+                obj=prompt))
+    return findings
+
+
+def check_text_free_is_asserted(story):
+    """A comic story must SAY somewhere that panels are delivered without words.
+
+    This is the check that does the real work, and it is deliberately the opposite shape to the one
+    above. Hunting for the disease can never be complete: the vocabulary is unbounded, it overlaps
+    the cure, and a reviewer measured a dozen realistic wordings that a phrase list misses. Demand
+    the cure instead - its absence is a single, decidable fact.
+    """
+    findings = []
+    if not story.is_comic:
+        return findings
+
+    combined = " ".join(_normalised(p.prompt) for _label, p in image_instruction_sources(story))
+    style = _normalised(story.style.prompt) if story.style else ""
+    if not any(_normalised(a) in combined or _normalised(a) in style for a in TEXT_FREE_ASSERTIONS):
+        findings.append(Finding(
+            FAIL, "no-text-free-assertion",
+            "This is a comic story, but nothing in the image agent's instructions or the Style "
+            "says the panels are delivered text-free. Without that the model letters whatever the "
+            "panel describes, and a baked balloon cannot be removed - it is part of the picture. "
+            "Add an explicit text-free instruction before generating anything."))
     return findings
 
 
@@ -250,6 +322,14 @@ def check_panels_can_be_rendered(story):
     from .models import Action
 
     findings = []
+    # There are TWO paid paths to a panel and they read different fields: `generate_image` uses
+    # `prompt`, `generate_comic` uses `prompt_comic`. A comic story may use either - this book
+    # generates text-free art through `generate_image` and composites the words afterwards, so its
+    # `prompt_comic` is empty on 504 of 512 rows BY DESIGN.
+    #
+    # So the question is not "is the comic field filled in" but "is there art direction on ANY
+    # path". Demanding `prompt_comic` on a book that does not use it produced 491 warnings on a
+    # healthy story, which is how a validator gets ignored.
     # `cast` and `props` anchor a panel just as well as `actor` and `background` do. Counting only
     # the two FK fields would report a crowd panel built entirely from `cast` as having no visual
     # reference, which is both wrong and the kind of wrong that gets a validator ignored.
@@ -259,20 +339,29 @@ def check_panels_can_be_rendered(story):
                .annotate(n_cast=Count("cast", distinct=True),
                          n_props=Count("props", distinct=True)))
     for action in actions:
-        prompt = (action.prompt or "").strip()
+        candidates = [(f, (getattr(action, f, None) or "").strip())
+                      for f in ("prompt", "prompt_comic")]
+        best = max(candidates, key=lambda kv: len(kv[1]))
+        field, prompt = best
         if not prompt:
             findings.append(Finding(
                 WARN, "empty-prompt",
-                f"Action {str(action)!r} has no prompt. Generating it would spend money on an "
+                f"Action {str(action)!r} has neither a prompt nor a prompt_comic. Generating it "
+                f"would spend money on an "
                 f"image with no art direction.",
                 obj=action))
         elif len(prompt) < MIN_USEFUL_PROMPT:
             findings.append(Finding(
                 WARN, "stub-prompt",
-                f"Action {str(action)!r} has a {len(prompt)}-character prompt, below the "
+                f"Action {str(action)!r} has a {len(prompt)}-character {field}, below the "
                 f"{MIN_USEFUL_PROMPT} needed to direct an image. A render would likely be wasted.",
                 obj=action))
-        if (action.background_id is None and action.actor_id is None
+        # A panel that already HAS art is not about to be generated, so "the renderer will invent
+        # an anchor" is not a thing that can happen to it. Firing on 47 already-drawn panels is how
+        # a validator earns 55 warnings on a healthy book and gets skipped - and it made --strict
+        # exit non-zero on a clean story, so the CI gate this advertises was dead on arrival.
+        if (action.image_id is None and action.image_comic_id is None
+                and action.background_id is None and action.actor_id is None
                 and not action.n_cast and not action.n_props):
             findings.append(Finding(
                 WARN, "no-anchor",
@@ -286,14 +375,19 @@ def check_panels_can_be_rendered(story):
 def _onpage_elements(action):
     """[(type, text)] for the words that will actually be drawn on this panel."""
     lettering = action.lettering
+    extra = []
     if isinstance(lettering, dict):
+        # Sibling string values are drawn too - three rows in this book keep their caption in a
+        # `chronicle` key - and reading only "elements" let those escape every house rule.
+        extra = [(k, v) for k, v in lettering.items() if k != "elements" and isinstance(v, str) and v]
         lettering = lettering.get("elements", [])
     if not isinstance(lettering, list):
-        return []
-    out = []
+        return extra
+    out = list(extra)
     for el in lettering:
-        if isinstance(el, dict) and el.get("text"):
-            out.append((el.get("type") or "?", str(el["text"])))
+        # A non-string `text` measured via str() counts its repr: ["a","b"] scores 24 characters.
+        if isinstance(el, dict) and isinstance(el.get("text"), str) and el["text"]:
+            out.append((el.get("type") or "?", el["text"]))
     return out
 
 
@@ -307,8 +401,13 @@ def check_onpage_text_house_rules(story):
 
     from .models import Action
 
-    banned = getattr(settings, "LETTERING_BANNED_CHARACTERS", DEFAULT_BANNED_CHARACTERS) or ""
-    caps = getattr(settings, "LETTERING_MAX_CHARS", DEFAULT_MAX_CHARS) or {}
+    # Coerced, not trusted. `LETTERING_MAX_CHARS = 110` (the obvious mistake) used to raise
+    # AttributeError straight out of the admin action; a validator must not be the thing that
+    # breaks the page.
+    raw_banned = getattr(settings, "LETTERING_BANNED_CHARACTERS", DEFAULT_BANNED_CHARACTERS)
+    banned = "".join(raw_banned) if isinstance(raw_banned, (str, list, tuple)) else ""
+    raw_caps = getattr(settings, "LETTERING_MAX_CHARS", DEFAULT_MAX_CHARS)
+    caps = raw_caps if isinstance(raw_caps, dict) else {}
     if not banned and not caps:
         return []
 
@@ -336,6 +435,7 @@ def check_onpage_text_house_rules(story):
 
 CHECKS = (
     check_image_agents_do_not_letter,
+    check_text_free_is_asserted,
     check_style_does_not_letter,
     check_referenced_entities_are_armed,
     check_no_duplicate_names,
