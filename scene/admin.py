@@ -116,7 +116,7 @@ class StoryAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHisto
     list_display = ['__str__', 'items', 'image_intro', 'add_scene', 'last_tasks']
     actions = ['clone', 'add_me_as_author', 'generate_scene_elements', 'generate_render', 'refresh_render', 'validate_story']
 
-    @admin.action(description="Validate story (check before spending)")
+    @admin.action(description="Validate story (check before spending)", permissions=["change"])
     def validate_story(self, request, queryset):
         """Report the configuration faults that turn generation spend into unusable art.
 
