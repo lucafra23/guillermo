@@ -339,7 +339,7 @@ class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
     search_fields = ['name']
-    actions = ['letter_action', 'generate_comic', 'comic_to_video']
+    actions = ['letter_action', 'suggest_placement', 'generate_comic', 'comic_to_video']
     list_sections = [MessageHistorySection]
     fieldsets = ACTION_FIELDSETS
 
