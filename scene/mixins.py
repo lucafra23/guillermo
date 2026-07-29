@@ -1,4 +1,5 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.template.response import TemplateResponse
 from django.utils.html import format_html
 
 from django.utils.translation import gettext_lazy as _
@@ -338,12 +339,77 @@ class AdminActionsMixin:
                 obj.cast.set(cast)
         self.message_user(request, "Selected items have been cloned.")
 
-    @admin.action(description="Generate image")
-    def default_generate_image(self, request, queryset):
+    def _queue_generate_image(self, request, queryset):
         for obj in queryset:
             if Task.createTaskIfQueueEnabled( obj, settings.TASK_TYPE_GENERATE_IMAGE, owner=request.user) is None:
                 obj.generate_image(user=request.user)
-            self.message_user(request, "Image generated for item ID {}.".format(obj.id))
+
+    @staticmethod
+    def _spend_estimate(count):
+        """A money figure, when the deployment has told us what a generation costs.
+
+        Deliberately absent rather than guessed when unset: a wrong number on a confirmation
+        screen is worse than no number, because people act on it.
+        """
+        rate = getattr(settings, "IMAGE_GENERATION_COST", None)
+        if not rate:
+            return ""
+        return f" (about ${rate * count:.2f})"
+
+    @admin.action(description="Generate image (only the missing ones)")
+    def generate_missing_images(self, request, queryset):
+        """Generate only for rows that have no image yet.
+
+        The common case this exists for: a 40-panel scene where 3 panels need art. Selecting the
+        scene and hitting "Generate image" spends on all 40 AND replaces 37 approved plates, with
+        no undo.
+        """
+        missing = queryset.filter(image__isnull=True)
+        count = missing.count()
+        skipped = queryset.count() - count
+        if not count:
+            self.message_user(
+                request, f"Nothing to do: all {skipped} selected item(s) already have an image.",
+                level=messages.INFO)
+            return
+        self._queue_generate_image(request, missing)
+        self.message_user(
+            request,
+            f"Queued {count} image(s){self._spend_estimate(count)}. "
+            f"Left {skipped} existing image(s) untouched.",
+            level=messages.SUCCESS)
+
+    @admin.action(description="Generate image")
+    def default_generate_image(self, request, queryset):
+        """Generate for every selected row, confirming first if that would destroy existing art.
+
+        `generate_image` overwrites in place and the previous filer row is not reachable from the
+        admin afterwards, so an accidental bulk generate is unrecoverable work as well as
+        unrecoverable money. The interstitial only appears when something would actually be
+        overwritten, so the ordinary "generate a fresh batch" path is unchanged.
+        """
+        overwrite = queryset.filter(image__isnull=False)
+        n_overwrite = overwrite.count()
+        if n_overwrite and request.POST.get("confirm_overwrite") != "yes":
+            return TemplateResponse(request, "admin/confirm_generate_overwrite.html", {
+                **self.admin_site.each_context(request),
+                "title": "Overwrite existing images?",
+                "queryset": queryset,
+                "overwrite": overwrite,
+                "n_overwrite": n_overwrite,
+                "n_total": queryset.count(),
+                "spend_total": self._spend_estimate(queryset.count()),
+                "action_name": "default_generate_image",
+                "opts": self.model._meta,
+                "media": self.media,
+            })
+        total = queryset.count()
+        self._queue_generate_image(request, queryset)
+        self.message_user(
+            request,
+            f"Queued {total} image(s){self._spend_estimate(total)}"
+            + (f", replacing {n_overwrite} existing image(s)." if n_overwrite else "."),
+            level=messages.SUCCESS)
 
     @admin.action(description="Refine image")
     def default_refine_image(self, request, queryset):
