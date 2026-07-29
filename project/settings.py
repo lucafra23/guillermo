@@ -425,6 +425,11 @@ TASK_TYPE_SYNC_EXPORT = 'sync_export'
 TASK_TYPE_SYNC_IMPORT = 'sync_import'
 TASK_TYPE_LETTER_ACTION = 'letter_action'
 
+# What one image generation costs, in whatever currency the deployment bills in. Used ONLY to put
+# a number on the confirmation screen before a batch is queued. Unset or unusable means no figure
+# is shown, which is deliberate: a wrong number on a spend confirmation is worse than no number.
+IMAGE_GENERATION_COST = 0.15
+
 # --- lettering (graphic-novel text compositing) -----------------------------------------
 # Font FACES are deployment-supplied and never vendored: comic lettering faces are commonly
 # licensed for use but not for redistribution inside another product. Point LETTERING_FONT_DIR
