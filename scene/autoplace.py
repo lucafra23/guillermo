@@ -163,17 +163,31 @@ def propose(el, img, cell, integral, taken):
 
 
 def suggest_for_action(action, only_missing=True):
-    """Propose boxes for an Action's lettering elements. Returns (elements, n_placed, n_failed).
+    """Propose boxes for an Action's lettering elements. Returns (lettering, n_placed, n_failed).
 
-    The returned list is a NEW list - nothing is saved here, so a caller can preview.
-    Elements are placed in order, each avoiding the ones already positioned, because two balloons
-    independently choosing "the emptiest space" would choose the same space.
+    The first element of the return value is a NEW value in the SAME SHAPE as `action.lettering`
+    was - nothing is saved here, so a caller can preview.
+
+    Shape matters. `lettering` may be a bare list OR `{"elements": [...]}` with sibling keys, and
+    three rows in this book's database carry a `chronicle` key alongside their elements. Returning
+    a bare list for a wrapped input and letting the caller save it would silently delete those
+    siblings - destroying authored content while claiming to have placed a balloon.
     """
     from .lettering import normalise_elements
 
     elements = normalise_elements_lenient(action.lettering)
+    wrapper = action.lettering if isinstance(action.lettering, dict) else None
+
+    def shaped(els):
+        """Put the elements back in the shape they arrived in."""
+        if wrapper is None:
+            return els
+        out = dict(wrapper)
+        out["elements"] = els
+        return out
+
     if not elements or not action.image:
-        return elements, 0, 0
+        return shaped(elements), 0, 0
 
     with Image.open(action.image.path) as img:
         img = img.convert("RGB")
@@ -211,7 +225,7 @@ def suggest_for_action(action, only_missing=True):
     # long to fit would throw away the placements that did work.
     if newly_placed:
         normalise_elements(newly_placed)
-    return out, placed, failed
+    return shaped(out), placed, failed
 
 
 def normalise_elements_lenient(lettering):
