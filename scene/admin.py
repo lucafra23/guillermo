@@ -559,7 +559,7 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
 
         return JsonResponse({"url": _settings.MEDIA_URL + relative})
 
-    @admin.action(description="Bulk edit text")
+    @admin.action(description="Bulk edit text", permissions=["change"])
     def bulk_edit_text(self, request, queryset):
         """Edit the words on many panels in one form, with the plate beside each one.
 
