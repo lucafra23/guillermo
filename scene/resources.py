@@ -245,9 +245,15 @@ class ActionResource(resources.ModelResource):
 
     class Meta:
         model = Action
-        import_id_fields = ('scene', 'order')
+        # Keyed on (scene, NAME), not (scene, order). `Action.order` is not unique within a scene:
+        # nothing enforces it, and on a real 501-panel book 105 (scene, order) pairs were shared by
+        # 225 panels. Importing on that key silently collapsed them - the log said
+        # "501 rows, errors=False" and the database held 381. A quarter of the book disappeared
+        # with no error, which is the worst possible way for an import to fail.
+        import_id_fields = ('scene', 'name')
         fields = (
-            'story', 'scene', 'order', 'name', 'is_intro', 'prompt', 'text', 'prompt_comic',
+            'story', 'scene', 'order', 'name', 'is_intro', 'prompt', 'text', 'lettering',
+            'prompt_comic',
             'actor', 'background', 'cast', 'props', 'consistent_with', 'voice',
             'image', 'image_comic', 'image_refine', 'image_first', 'image_last', 'video', 'audio_voice',
         )
