@@ -17,3 +17,4 @@ djantic2
 djangorestframework
 redis
 django-import-export
+numpy
