@@ -345,7 +345,8 @@ class CharacterAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin,
     list_display_links = ('name',)
     autocomplete_fields = ['story']
     list_filter = ['story', 'id']
-    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image',
+               'default_refine_image', 'revert_to_previous_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
 
@@ -357,7 +358,8 @@ class BackgroundAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin
     list_display_links = ('name',)
     autocomplete_fields = ['story']
     list_filter = ['story', 'id']
-    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image',
+               'default_refine_image', 'revert_to_previous_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
 
@@ -371,7 +373,8 @@ class PropAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Admi
     list_editable = ('prompt','prompt_refine')
     autocomplete_fields = ['story']
     list_filter = ['story', 'id']
-    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image',
+               'default_refine_image', 'revert_to_previous_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
 
@@ -410,7 +413,8 @@ class ActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, 
     list_display_links = ('get_name',)
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
     search_fields = ['get_name']
-    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image',
+               'default_refine_image', 'revert_to_previous_image']
     fieldsets = ACTION_FIELDSETS
 
 @admin.register(VideoAction)

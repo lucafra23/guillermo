@@ -434,6 +434,11 @@ class Nudge(models.Model, EmailSenderMixin):
 class Prop(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, ModelDisplayMixin):
     name = models.CharField(_("name"), max_length=100, default="")
     image = FilerImageField(verbose_name=_("image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='props')
+    # The plate this one replaced. `generate_image` overwrites in place, which is a
+    # paid, irreversible loss of approved art; keeping one step back makes a misfired
+    # click recoverable. SET_NULL, never CASCADE: losing the history must never take
+    # the live plate with it.
+    previous_image = FilerImageField(verbose_name=_("previous image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='prop_previous', editable=False)
     prompt= models.TextField(_("prompt"), null=True, blank=True)
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
     story = models.ForeignKey('Story', verbose_name=_("story"), related_name='props', null=True, blank=True, on_delete=models.CASCADE)
@@ -500,6 +505,11 @@ class Voice(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, Mo
 class Character(models.Model, GetContentsMixin, TaskHolder, ModelDisplayMixin):
     name = models.CharField(_("name"), max_length=100, default="")
     image = FilerImageField(verbose_name=_("image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='characters')
+    # The plate this one replaced. `generate_image` overwrites in place, which is a
+    # paid, irreversible loss of approved art; keeping one step back makes a misfired
+    # click recoverable. SET_NULL, never CASCADE: losing the history must never take
+    # the live plate with it.
+    previous_image = FilerImageField(verbose_name=_("previous image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='character_previous', editable=False)
     prompt= models.TextField(_("prompt"), null=True, blank=True)
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
     story = models.ForeignKey('Story', verbose_name=_("story"), related_name='characters', null=True, blank=True, on_delete=models.CASCADE)
@@ -532,6 +542,11 @@ class Background(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolde
     name = models.CharField(_("name"), max_length=100, default="")
     prompt= models.TextField(_("prompt"), null=True, blank=True)
     image = FilerImageField(verbose_name=_("image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='backgrounds')
+    # The plate this one replaced. `generate_image` overwrites in place, which is a
+    # paid, irreversible loss of approved art; keeping one step back makes a misfired
+    # click recoverable. SET_NULL, never CASCADE: losing the history must never take
+    # the live plate with it.
+    previous_image = FilerImageField(verbose_name=_("previous image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='background_previous', editable=False)
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
     image_refine = FilerImageField(verbose_name=_("image refine"), null=True, blank=True, on_delete=models.SET_NULL, related_name='background_refine')
     story = models.ForeignKey('Story', verbose_name=_("story"), related_name='backgrounds', null=True, blank=True, on_delete=models.CASCADE)
@@ -645,6 +660,11 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
     prompt = models.TextField(_("prompt"), null=True, blank=True)
     order = models.PositiveIntegerField(_("order"), default=0, db_index=True)
     image = FilerImageField(verbose_name=_("image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='panel')
+    # The plate this one replaced. `generate_image` overwrites in place, which is a
+    # paid, irreversible loss of approved art; keeping one step back makes a misfired
+    # click recoverable. SET_NULL, never CASCADE: losing the history must never take
+    # the live plate with it.
+    previous_image = FilerImageField(verbose_name=_("previous image"), null=True, blank=True, on_delete=models.SET_NULL, related_name='panel_previous', editable=False)
     background = models.ForeignKey(Background, verbose_name=_("background"), related_name='actions', on_delete=models.SET_NULL, null=True, blank=True)
     actor = models.ForeignKey(Character, verbose_name=_("actor"), related_name='actions', on_delete=models.SET_NULL, null=True, blank=True)
     props = models.ManyToManyField(Prop, verbose_name=_("props"), related_name='actions', blank=True)
