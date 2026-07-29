@@ -245,7 +245,7 @@ class CharacterAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleH
     list_display_links = ('name',)
     autocomplete_fields = ['story']
     list_filter = ['story', 'id']
-    actions = ['clone', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
     list_sections = [MessageHistorySection]
@@ -258,7 +258,7 @@ class BackgroundAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, Simple
     list_display_links = ('name',)
     autocomplete_fields = ['story']
     list_filter = ['story', 'id']
-    actions = ['clone', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
     list_sections = [MessageHistorySection]
@@ -273,7 +273,7 @@ class PropAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistor
     list_editable = ('prompt','prompt_refine')
     autocomplete_fields = ['story']
     list_filter = ['story', 'id']
-    actions = ['clone', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
     search_fields = ['name']
     fieldsets = ELEMENT_FIELDSETS
     list_sections = [MessageHistorySection]
@@ -313,7 +313,7 @@ class ActionAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHist
     list_display_links = ('get_name',)
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
     search_fields = ['get_name']
-    actions = ['clone', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
 
