@@ -1,10 +1,10 @@
 import django.db.models.deletion
 import filer.fields.file
-from django.db import migrations
+from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    """Add Render.document, the output of a graphic-novel render.
+    """Add Render.document and Render.config, the output and options of a graphic-novel render.
 
     Deliberately contains ONLY this field. `makemigrations` also wanted to emit AlterField
     operations for the `action` SlugField on Action/Background/Character/Prop/Scene/Story/SyncItem:
@@ -30,5 +30,10 @@ class Migration(migrations.Migration):
                 to="filer.file",
                 verbose_name="document",
             ),
+        ),
+        migrations.AddField(
+            model_name="render",
+            name="config",
+            field=models.JSONField(blank=True, null=True, verbose_name="config"),
         ),
     ]

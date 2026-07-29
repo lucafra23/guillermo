@@ -914,6 +914,10 @@ class Render(RenderTypeMixin, models.Model, TaskHolder, ModelDisplayMixin):
     # A graphic-novel render is a document, not a video. Kept as its own field rather than reusing
     # `video`, so a comic render never looks like a film that failed to encode.
     document = FilerFileField(verbose_name=_("document"), null=True, blank=True, on_delete=models.SET_NULL, related_name='render_documents')
+    # Render-wide options for the comic renderer (portable / max_width / quality).
+    # Deliberately NOT on RenderItem: `refresh_render` deletes and rebuilds every item, so any
+    # per-item config is destroyed by the one action you must run to populate the render at all.
+    config = models.JSONField(_("config"), null=True, blank=True)
     story = models.ForeignKey(Story, verbose_name=_("story"), related_name='renders', null=True, blank=True, on_delete=models.CASCADE)
     render_type = models.CharField(
         _("render type"),

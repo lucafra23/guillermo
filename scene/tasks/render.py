@@ -103,11 +103,7 @@ class VideoRender2:
         first = None
 
         if item.render_type == item.RENDER_TYPE_GRAPHIC_NOVEL:
-            # A graphic novel is a document, not a video track. Hand it to the comic renderer
-            # rather than returning nothing, which is what made the advertised comic render type
-            # produce no output at all.
-            from .comic import ComicRender
-            return ComicRender(self.task).process()
+            return
 
         for render_item in item.render_items.all().order_by('order'):
             clip = None

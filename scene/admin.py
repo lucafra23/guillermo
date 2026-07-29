@@ -463,9 +463,12 @@ class RenderItemAdmin(ModelAdmin):
 
 @admin.register(Render)
 class RenderAdmin(AjaxSectionAdminMixin, AdminActionsMixin, ModelAdmin):
-    list_display = ('name', 'scene', 'render_type', 'video_player', 'video_download', 'last_tasks')
+    list_display = ('name', 'scene', 'render_type', 'video_player', 'video_download',
+                    'document_download', 'last_tasks')
     list_display_links = ('name',)
-    actions = ['refresh_scene_video']
+    # `refresh_scene_video` was listed here but is not defined anywhere in the codebase, so
+    # ModelAdmin.get_action dropped it silently and this admin offered no working action at all.
+    actions = []
 
 
 @admin.register(ContactRequest)

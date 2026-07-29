@@ -14,6 +14,11 @@
         <div class="aspect-video w-full bg-black flex items-center justify-center relative group overflow-hidden">
             {% if render.video %}
                 {{ render.video_player|safe }}
+            {% elif render.document %}
+                <div class="flex flex-col items-center gap-1 text-font-tertiary-light dark:text-font-tertiary-dark p-4">
+                    <span class="material-symbols-outlined text-3xl">menu_book</span>
+                    <span class="text-[10px]">{% trans "Ready to read" %}</span>
+                </div>
             {% else %}
                 <div class="flex flex-col items-center gap-1 text-font-tertiary-light dark:text-font-tertiary-dark p-4">
                     <span class="material-symbols-outlined text-3xl animate-pulse">videocam_off</span>
@@ -25,6 +30,8 @@
         <div class="p-3 mt-auto flex items-center justify-between border-t border-base-200 dark:border-base-800 bg-white/30 dark:bg-base-950/20">
             {% if render.video %}
                 {{ render.video_download|safe }}
+            {% elif render.document %}
+                {{ render.document_download|safe }}
             {% endif %}
         </div>
     </div>

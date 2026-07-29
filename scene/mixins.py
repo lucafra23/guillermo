@@ -75,6 +75,15 @@ class ModelDisplayMixin:
         return _("No Video")
     video_download.short_description = _("Video Download")
 
+    def document_download(self):
+        # A graphic-novel render attaches its output to `document`, not `video`. Without this the
+        # file is produced successfully and is reachable only through Filer's unfiled-files admin.
+        document = getattr(self, 'document', None)
+        if document and document.url:
+            return format_html('<a href="{}" download >{}</a>', document.url, _("Download"))
+        return _("No Document")
+    document_download.short_description = _("Document Download")
+
     def pic(self):
         return self._render_image_with_menu('image', _("Image"))
     pic.short_description = _("Image")
