@@ -186,7 +186,9 @@ class RenderSection(TemplateSection):
 
     def get_context_data(self, request, instance):
         return {
-            "renders": instance.renders.all(),
+            # The card template tests `render.video` and `render.document`; without this each
+            # render with either costs its own query to draw one row.
+            "renders": instance.renders.all().select_related("video", "document"),
             "instance": instance,
             "section_key": self.key
         }

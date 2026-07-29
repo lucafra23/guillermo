@@ -930,6 +930,13 @@ class Render(RenderTypeMixin, models.Model, TaskHolder, ModelDisplayMixin):
     name = models.CharField(_("name"), max_length=200, default="")
     scene = models.ForeignKey(Scene, verbose_name=_("scene"), related_name='renders', null=True, blank=True, on_delete=models.CASCADE)
     video = FilerFileField(verbose_name=_("video"), null=True, blank=True, on_delete=models.SET_NULL, related_name='render_videos')
+    # A graphic-novel render is a document, not a video. Kept as its own field rather than reusing
+    # `video`, so a comic render never looks like a film that failed to encode.
+    document = FilerFileField(verbose_name=_("document"), null=True, blank=True, on_delete=models.SET_NULL, related_name='render_documents')
+    # Render-wide options for the comic renderer (portable / max_width / quality).
+    # Deliberately NOT on RenderItem: `refresh_render` deletes and rebuilds every item, so any
+    # per-item config is destroyed by the one action you must run to populate the render at all.
+    config = models.JSONField(_("config"), null=True, blank=True)
     story = models.ForeignKey(Story, verbose_name=_("story"), related_name='renders', null=True, blank=True, on_delete=models.CASCADE)
     render_type = models.CharField(
         _("render type"),
@@ -971,9 +978,18 @@ class Render(RenderTypeMixin, models.Model, TaskHolder, ModelDisplayMixin):
 
         actions = []
         if self.story:
-            actions = list(Action.objects.filter(scene__story=self.story).order_by("order"))
+            # Order by SCENE first, then by the action's order within it. `Action.order` is
+            # per-scene — 501 actions across 16 scenes share only 64 distinct values — so
+            # ordering a whole story by `order` alone interleaves the scenes and produces
+            # scene 1 panel 1, scene 2 panel 1, scene 3 panel 1... For a film that shuffles the
+            # cut; for a graphic novel it shuffles the book. `id` is the final tiebreak so the
+            # sequence is at least stable when two actions genuinely share a position.
+            actions = list(
+                Action.objects.filter(scene__story=self.story)
+                .order_by("scene__order", "order", "id")
+            )
         elif self.scene:
-            actions = list(self.scene.actions.all().order_by('order'))
+            actions = list(self.scene.actions.all().order_by('order', 'id'))
 
         for i, action in enumerate(actions):
             self._create_item_from_action(action, order=i)

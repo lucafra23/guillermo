@@ -584,9 +584,31 @@ class RenderItemAdmin(ModelAdmin):
 
 @admin.register(Render)
 class RenderAdmin(AjaxSectionAdminMixin, AdminActionsMixin, ModelAdmin):
-    list_display = ('name', 'scene', 'render_type', 'video_player', 'video_download', 'last_tasks')
+    list_display = ('name', 'scene', 'render_type', 'video_player', 'video_download',
+                    'document_download', 'last_tasks')
     list_display_links = ('name',)
-    actions = ['refresh_scene_video']
+    # `refresh_scene_video` was listed here but is not defined anywhere in the codebase, so
+    # ModelAdmin.get_action dropped it silently and this admin offered no working action at all.
+    actions = ['rerender']
+
+    @admin.action(description="Re-run this render")
+    def rerender(self, request, queryset):
+        """Queue the render task against an EXISTING Render row.
+
+        Every other route creates a brand-new Render: "Refresh Render" on a Story or Scene calls
+        `generate_render()`, which does `Render.objects.create(...)` and therefore always starts
+        from an empty `config`. Without this action `Render.config` is write-only - you can set
+        `{"portable": true}` on the change form and nothing will ever read it - and a re-render
+        leaves the previous Render row and its document behind rather than replacing them.
+        """
+        for obj in queryset:
+            obj.refresh_render()
+            Task.createTaskIfQueueEnabled(
+                subject=obj,
+                task_type=settings.TASK_TYPE_VIDEO_RENDER,
+                owner=request.user,
+            )
+            self.message_user(request, _("Re-render queued for: {}").format(obj.name or obj.pk))
 
 
 @admin.register(ContactRequest)
