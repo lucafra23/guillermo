@@ -1,4 +1,4 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils.html import format_html
 
 from django.utils.translation import gettext_lazy as _
@@ -386,6 +386,36 @@ class AdminActionsMixin:
             if Task.createTaskIfQueueEnabled( obj, settings.TASK_TYPE_GENERATE_COMIC, owner=request.user) is None:
                 obj.generate_comic(user=request.user)
             self.message_user(request, "comic generated for item ID {}.".format(obj.id))
+
+    @admin.action(description="Letter (composite text onto art — free, keeps the art)")
+    def letter_action(self, request, queryset):
+        lettered = cleared = failed = queued = 0
+        for obj in queryset:
+            try:
+                if Task.createTaskIfQueueEnabled(obj, settings.TASK_TYPE_LETTER_ACTION, owner=request.user) is None:
+                    out = obj.letter(user=request.user)
+                    lettered += 1 if out else 0
+                    cleared += 0 if out else 1
+                else:
+                    queued += 1
+            except Exception as e:
+                failed += 1
+                self.message_user(request, f"Action {obj.id} ({obj.name}): {e}", level=messages.ERROR)
+        # One summary line rather than one message per panel: a scene-sized selection would
+        # otherwise bury a real failure under forty successes. Queued work is counted separately
+        # and never reported as done — the task has not run yet, and saying "lettered 40" when
+        # all forty are still pending (and may all fail) is worse than saying nothing.
+        parts = []
+        if queued:
+            parts.append(f"Queued {queued} panel(s) for lettering; see each panel's task status.")
+        if lettered:
+            parts.append(f"Lettered {lettered} panel(s).")
+        if cleared:
+            parts.append(f"{cleared} had no lettering, so any stale composite was cleared.")
+        if failed:
+            parts.append(f"{failed} failed — see the errors above.")
+        self.message_user(request, " ".join(parts) or "Nothing to letter.",
+                          level=messages.WARNING if failed else messages.INFO)
 
     @admin.action(description="Video from first to last")
     def generate_video_first_last(self, request, queryset):

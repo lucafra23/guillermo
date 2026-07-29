@@ -722,7 +722,113 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
         image_agent = Agent.objects.filter(output_type=Agent.OUTPUT_TYPE_IMAGE).first()
         out = image_agent.generate(self, preset=self.PRESET_COMIC, user=user)
         return out
-    
+
+    def letter(self, user=None):
+        """Composite `lettering` onto `image`, writing the result to `image_comic`.
+
+        Free and deterministic: no model call, no spend, and `image` is never touched. This is
+        the loop that makes text editable — change a caption, re-letter, keep the art. Compare
+        with `generate_comic()`, which asks the image model to draw the words and therefore
+        garbles exact text and returns different art every time.
+
+        Returns the new `image_comic`, or None when the panel has no lettering (in which case
+        any stale composite is cleared, so readers fall back to the bare plate via `intro()`).
+        """
+        import os
+        import random
+
+        from django.utils.text import slugify
+        from filer.models.imagemodels import Image as FilerImage
+
+        from .lettering import LetteringError, draw_overlay, normalise_elements
+
+        if not self.image:
+            raise LetteringError(
+                f"Action {self.id} ({self.name!r}) has no image to letter. Generate the plate first."
+            )
+
+        elements = normalise_elements(self.lettering)
+        previous = self.image_comic
+
+        if not elements:
+            # No words: drop any stale composite rather than leaving last edit's text on screen.
+            if previous:
+                self.image_comic = None
+                self.save(update_fields=["image_comic"])
+                self._discard_composite(previous)
+            return None
+
+        name = (
+            f"lettered_{slugify(self.name) or self.id}_{self.id}_{random.randint(1000, 9999)}.png"
+        )
+        relative = f"{self.COMPOSITE_DIR}{name}"
+        absolute = os.path.join(settings.MEDIA_ROOT, relative)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+
+        draw_overlay(self.image.path, elements, absolute)
+
+        try:
+            out = FilerImage.objects.create(
+                original_filename=name,
+                file=relative,
+                name=name,
+            )
+            self.image_comic = out
+            self.save(update_fields=["image_comic"])
+        except Exception:
+            # The composite is on disk but nothing references it: remove it rather than leave a
+            # file that no row knows about and no cleanup will ever find.
+            try:
+                os.remove(absolute)
+            except OSError:
+                pass
+            raise
+
+        # A composite is a derived artifact, cheap to rebuild, so the superseded one is removed
+        # rather than orphaned in filer. This is the opposite of the rule for `image`, which is
+        # paid for and must never be discarded (see the plate-history work).
+        self._discard_composite(previous)
+        return out
+
+    COMPOSITE_DIR = "action_lettered/"
+
+    @staticmethod
+    def _discard_composite(filer_image):
+        """Delete a superseded composite, but ONLY if nothing anywhere still points at it.
+
+        Deleting a filer File nulls every FK to it (all are SET_NULL) and removes the file from
+        disk, so a wrong guess here destroys data with no undo. Two independent conditions must
+        both hold:
+
+        1. We wrote it. Composites live under COMPOSITE_DIR; a paid plate never does. This alone
+           prevents the worst case, where `image` and `image_comic` reference the SAME row (which
+           `scene/admin_utils.py`'s save-by-URL and the import-export `image_comic_url` column can
+           both produce) and deleting the "old composite" would delete the plate.
+        2. Nothing references it. Not just other Actions: `RenderItem.image` is routinely set to
+           `action.image_comic` by `comic_to_video` and by `Render._create_item_from_action`, so a
+           row can be shared with a render that is still in use. The check walks every reverse
+           relation rather than naming a few, so a future model that borrows a composite is
+           covered without anyone remembering to update this method.
+
+        Anything unexpected leaves the row alone: an orphaned file is a wasted megabyte, a wrongly
+        deleted one is lost work.
+        """
+        if not filer_image:
+            return
+        try:
+            name = getattr(filer_image.file, "name", "") or ""
+            if not name.startswith(Action.COMPOSITE_DIR):
+                return  # not ours to delete
+            for relation in filer_image._meta.related_objects:
+                related_model = relation.related_model
+                field_name = relation.field.name
+                if related_model.objects.filter(**{field_name: filer_image}).exists():
+                    return  # still in use somewhere
+            filer_image.delete()
+        except Exception:  # a missing file or an odd relation must not fail the letter pass
+            pass
+
+
     def intro(self):
         out = None
         if self.image_comic:
