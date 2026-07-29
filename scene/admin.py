@@ -2,7 +2,7 @@ import io
 import os
 import zipfile
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from httpcore import request
 from unfold.admin import ModelAdmin
 from django.urls import path
@@ -114,7 +114,28 @@ class StoryAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHisto
         PromptFormSection
     ]
     list_display = ['__str__', 'items', 'image_intro', 'add_scene', 'last_tasks']
-    actions = ['clone', 'add_me_as_author', 'generate_scene_elements','generate_render', 'refresh_render']
+    actions = ['clone', 'add_me_as_author', 'generate_scene_elements', 'generate_render', 'refresh_render', 'validate_story']
+
+    @admin.action(description="Validate story (check before spending)")
+    def validate_story(self, request, queryset):
+        """Report the configuration faults that turn generation spend into unusable art.
+
+        Findings are reported one message per finding rather than as a count: the whole reason the
+        2026-07-24 drift survived is that nobody could see WHICH prompt was at fault, only that
+        something was wrong. A count is a thing you dismiss.
+        """
+        from .doctor import FAIL, check_story, summarise
+
+        for story in queryset:
+            findings = check_story(story)
+            fails, warns, verdict = summarise(findings)
+            for finding in findings:
+                self.message_user(
+                    request, f"{story.name}: {finding.message}",
+                    level=messages.ERROR if finding.severity == FAIL else messages.WARNING)
+            self.message_user(
+                request, f"{story.name}: {verdict}",
+                level=messages.ERROR if fails else (messages.WARNING if warns else messages.SUCCESS))
 
     fieldsets = (
         ("Write",{
