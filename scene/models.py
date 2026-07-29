@@ -231,7 +231,26 @@ class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, Mo
 
     def __str__(self):
         return "{}".format(self.name if self.name else f"Scene{self.id} of {self.story}")
-    
+
+    def save(self, *args, **kwargs):
+        """Give a brand-new scene the next free position in its story.
+
+        `order` decides the reading order of the whole story: `Meta.ordering` is `['order']`, and
+        a graphic-novel render pages the book by scene order then action order. But `order`
+        defaults to 0 and nothing in the codebase ever assigned it, so every scene created through
+        the admin arrived at position 0 - tied with scene one, resolved by whatever the database
+        felt like. On a 16-scene book that is a shuffled book with no visible cause.
+
+        Only applies to a scene being created, that has a story, and that has not been given a
+        position: an explicit `order=0` on an existing row is left exactly as it is, so this can
+        never renumber work someone has already arranged by hand.
+        """
+        if self._state.adding and self.story_id and not self.order:
+            last = (Scene.objects.filter(story_id=self.story_id)
+                    .aggregate(models.Max("order"))["order__max"])
+            self.order = 0 if last is None else last + 1
+        return super().save(*args, **kwargs)
+
     def get_instructions(self, preset):
         return self.instructions.filter(category=preset)
 
