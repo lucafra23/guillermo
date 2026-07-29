@@ -224,7 +224,11 @@ class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, Mo
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
     action = models.SlugField(_("action"), choices=settings.TASK_TYPE_CHOICES, null=True, blank=True)
 
-    order = models.PositiveIntegerField(_("order"), default=0, db_index=True)
+    # Nullable ON PURPOSE: with `default=0` there is no way to tell "the author did not say"
+    # from "the author said position 0", so a scene deliberately created at the front of a
+    # story was silently pushed to the end. NULL means unset and gets the next free
+    # position; an explicit 0 is kept.
+    order = models.PositiveIntegerField(_("order"), null=True, blank=True, db_index=True)
     story = models.ForeignKey('Story', verbose_name=_("story"), related_name='scenes', null=True, blank=True, on_delete=models.CASCADE)
     author = models.ForeignKey('Author', verbose_name=_("author"), related_name='scenes', on_delete=models.CASCADE, null=True, blank=True)
     instructions = models.ManyToManyField('agent.Prompt', verbose_name=_("instructions"), null=True, blank=True)
@@ -245,7 +249,14 @@ class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, Mo
         position: an explicit `order=0` on an existing row is left exactly as it is, so this can
         never renumber work someone has already arranged by hand.
         """
-        if self._state.adding and self.story_id and not self.order:
+        # `not self.order` cannot distinguish "unset" from a deliberate 0, so creating a scene at
+        # position 0 - prepending one to the front of a story - silently became max+1. The add form
+        # shows an `order` box, so the author was watching their value be overridden.
+        # `_state.adding` alone is also not enough: `AdminActionsMixin.clone` sets `pk = None`,
+        # which does NOT set `_state.adding`, so a cloned scene skipped this entirely and kept
+        # colliding with its neighbour.
+        creating = self._state.adding or self.pk is None
+        if creating and self.story_id and self.order is None:
             last = (Scene.objects.filter(story_id=self.story_id)
                     .aggregate(models.Max("order"))["order__max"])
             self.order = 0 if last is None else last + 1
