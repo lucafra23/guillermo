@@ -26,11 +26,13 @@ IT PROPOSES, THE FIELD STORES. Nothing here runs at render time. Suggestions are
 `Action.lettering` as ordinary boxes, so the composite stays deterministic and a human can
 override any of them - the letterer never guesses.
 """
+import math
+
 import numpy as np
 from PIL import Image, ImageDraw
 
 from .lettering import (
-    FONT_MIN, REF_W, STROKE_DIV, STYLES, _OVAL, _OVAL_INSET, _font, _line_h, _wrap,
+    FONT_MIN, REF_W, STROKE_DIV, STYLES, _OVAL, _OVAL_INSET, _font, _line_h, _wrap, font_path,
 )
 
 GRID_W, GRID_H = 96, 168          # energy grid; ~8px cells on a 768x1344 plate
@@ -95,7 +97,14 @@ def box_size(el, W, H, width_frac, font_px):
     text actually fits in rather than an estimate that overflows at render time.
     """
     t = el["type"]
-    _fill, _out, _txt, caps, font_path = STYLES[t]
+    # STYLES stores a ROLE ("bold"/"regular"), not a path. `font_path(role)` resolves it to the
+    # configured face. Passing the role straight to `_font` makes ImageFont.truetype("bold") fail
+    # and fall through to the DejaVu fallback - silently, and even when LETTERING_FONT_DIR is set
+    # correctly, because the one-shot warning lives inside `font_path()` and was never reached.
+    # Measured before this fix: 185 of 185 real elements sized against the wrong face, median 30%
+    # too tall, worst 93%. The compositor then fits type to the oversized box, so the error lands
+    # on the page rather than staying an internal rounding difference.
+    _fill, _out, _txt, caps, role = STYLES[t]
     text = (el.get("text") or "")
     text = text.upper() if caps else text
     pw = int(width_frac * W)
@@ -105,7 +114,7 @@ def box_size(el, W, H, width_frac, font_px):
     pad = (ow + 2) if oval else max(10, pw // 18)
 
     d = ImageDraw.Draw(Image.new("L", (1, 1)))
-    font = _font(font_path, font_px)
+    font = _font(font_path(role), font_px)
     lines = _wrap(d, text, font, int(pw * fx) - 2 * pad)
     lh = _line_h(font, font_px)
     ph = int((lh * len(lines) + 2 * pad) / fy)
@@ -189,43 +198,102 @@ def suggest_for_action(action, only_missing=True):
     if not elements or not action.image:
         return shaped(elements), 0, 0
 
+    # Only elements with NO box at all are candidates. Anything else - including a box that is
+    # malformed - is the author's, and a wrong box is a typo to fix, not an absence to fill.
+    # Defining "has a box" as "a list of exactly four" meant a fat-fingered [x, y, w] was treated
+    # as missing and silently replaced, losing coordinates that were placed by hand.
+    def needs_a_box(el):
+        return "box" not in el or el.get("box") is None
+
+    # Nothing to do: skip opening the plate entirely. `energy_grid` costs ~0.3s per panel, so a
+    # 500-panel selection where everything is already placed used to spend ~150s doing nothing.
+    if only_missing and not any(needs_a_box(el) for el in elements if isinstance(el, dict)):
+        return shaped(elements), 0, 0
+
     with Image.open(action.image.path) as img:
         img = img.convert("RGB")
         cell, integral = energy_grid(img)
 
-        taken = [el["box"] for el in elements
-                 if only_missing and isinstance(el.get("box"), (list, tuple)) and len(el["box"]) == 4]
+        # Seed the collision set only with boxes that are actually usable geometry. An unvalidated
+        # box reaches `overlaps()` arithmetic, where a string or a None coordinate raises and takes
+        # the whole panel down, and a negative width compares wrongly without raising at all.
+        taken = [b for b in (_usable_box(el.get("box")) for el in elements
+                             if isinstance(el, dict)) if b is not None]
         placed = failed = 0
         out, newly_placed = [], []
         for el in elements:
+            # Not every entry is an element. A stray string or null in the list is malformed, but
+            # it is the author's malformed data: carry it through untouched rather than dropping
+            # it on the floor and saving the shortened list back.
+            if not isinstance(el, dict):
+                out.append(el)
+                continue
             el = dict(el)
-            has_box = isinstance(el.get("box"), (list, tuple)) and len(el["box"]) == 4
-            if only_missing and has_box:
+            if only_missing and not needs_a_box(el):
                 out.append(el)
                 continue
             if el.get("type") not in DEFAULTS:
                 out.append(el)
                 failed += 1
                 continue
-            result = propose(el, img, cell, integral, taken)
+            if not (el.get("text") or "").strip():
+                # The compositor drops empty-text elements, so a box placed here is never
+                # validated and never revisited once it exists - locking in a sliver box for a
+                # balloon whose words have not been written yet.
+                out.append(el)
+                failed += 1
+                continue
+            try:
+                result = propose(el, img, cell, integral, taken)
+            except Exception:
+                # A malformed `tail` or `place` is one element's problem, not the panel's.
+                result = None
             if result is None:
                 out.append(el)
                 failed += 1
                 continue
             box, _cost = result
             el["box"] = box
+            # Validate THIS element alone, immediately. Validating the whole batch at the end
+            # meant one bad element raised and discarded every good placement on the panel -
+            # precisely what the previous comment here claimed it avoided.
+            try:
+                normalise_elements([el])
+            except Exception:
+                del el["box"]
+                out.append(el)
+                failed += 1
+                continue
             taken.append(box)
             placed += 1
             out.append(el)
             newly_placed.append(el)
 
-    # Every box this produced must survive the compositor's own validation, or "suggest" would
-    # write specs that cannot be rendered. Only what WE placed is checked: an element that could
-    # not be positioned still has no box, and rejecting the whole panel because one line was too
-    # long to fit would throw away the placements that did work.
-    if newly_placed:
-        normalise_elements(newly_placed)
     return shaped(out), placed, failed
+
+
+def _usable_box(box):
+    """A stored box as four floats, or None if it is not real geometry.
+
+    Returns the COERCED value rather than a yes/no, because the caller has to put it in `taken`
+    and `overlaps()` does arithmetic on it. Validating without coercing let `["0.1", "0.2", ...]`
+    through as strings, which then raised inside the collision test - masked as "could not place
+    this element" rather than reported as the malformed box it is.
+    """
+    if not isinstance(box, (list, tuple)) or len(box) != 4:
+        return None
+    try:
+        x, y, w, h = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (x, y, w, h)) or w <= 0 or h <= 0:
+        return None
+    return [x, y, w, h]
+
+
+def _is_usable_box(box):
+    """True when a stored box is real geometry. Kept for callers that only need the predicate."""
+    return _usable_box(box) is not None
 
 
 def normalise_elements_lenient(lettering):
@@ -240,4 +308,6 @@ def normalise_elements_lenient(lettering):
         lettering = lettering.get("elements", [])
     if not isinstance(lettering, list):
         return []
-    return [dict(el) for el in lettering if isinstance(el, dict)]
+    # Non-dict entries are carried through untouched. Filtering them here would delete a
+    # stray value from the author's spec the moment anything else on the panel was placed.
+    return [dict(el) if isinstance(el, dict) else el for el in lettering]
