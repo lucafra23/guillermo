@@ -86,6 +86,19 @@ MIN_USEFUL_PROMPT = 120
 # skip anything, since those affect the whole story.
 PARKED_PREFIX = "["
 
+# House rules for the words that end up ON THE PAGE. Both default to off, because they are
+# editorial policy rather than facts about images - a platform must not invent a style guide. A
+# deployment that has one declares it:
+#
+#     LETTERING_BANNED_CHARACTERS = "—–"      # em-dash, en-dash
+#     LETTERING_MAX_CHARS = {"caption": 110}
+#
+# These exist because moving authoring out of spec files loses whatever the spec files enforced.
+# Rules that were checked before every render become things you remember, and a rule you remember
+# is a rule you break on the day you are busy.
+DEFAULT_BANNED_CHARACTERS = ""
+DEFAULT_MAX_CHARS = {}
+
 FAIL = "FAIL"
 WARN = "WARN"
 
@@ -270,12 +283,64 @@ def check_panels_can_be_rendered(story):
     return findings
 
 
+def _onpage_elements(action):
+    """[(type, text)] for the words that will actually be drawn on this panel."""
+    lettering = action.lettering
+    if isinstance(lettering, dict):
+        lettering = lettering.get("elements", [])
+    if not isinstance(lettering, list):
+        return []
+    out = []
+    for el in lettering:
+        if isinstance(el, dict) and el.get("text"):
+            out.append((el.get("type") or "?", str(el["text"])))
+    return out
+
+
+def check_onpage_text_house_rules(story):
+    """Enforce the deployment's rules for on-page words, if it declared any.
+
+    Checked against the LETTERING, not `Action.text`: the lettering elements are what the
+    compositor draws, so they are what a reader sees. A rule enforced anywhere else is advisory.
+    """
+    from django.conf import settings
+
+    from .models import Action
+
+    banned = getattr(settings, "LETTERING_BANNED_CHARACTERS", DEFAULT_BANNED_CHARACTERS) or ""
+    caps = getattr(settings, "LETTERING_MAX_CHARS", DEFAULT_MAX_CHARS) or {}
+    if not banned and not caps:
+        return []
+
+    findings = []
+    for action in (Action.objects.filter(scene__story=story)
+                   .exclude(name__startswith=PARKED_PREFIX)
+                   .exclude(lettering__isnull=True)):
+        for kind, text in _onpage_elements(action):
+            hits = sorted({ch for ch in banned if ch in text})
+            if hits:
+                findings.append(Finding(
+                    FAIL, "banned-character",
+                    f"Action {str(action)!r} has {', '.join(repr(h) for h in hits)} in its on-page "
+                    f"{kind} text. This deployment does not allow it on the page: {text[:70]!r}",
+                    obj=action))
+            cap = caps.get(kind)
+            if cap and len(text) > cap:
+                findings.append(Finding(
+                    FAIL, "onpage-too-long",
+                    f"Action {str(action)!r} has a {len(text)}-character {kind}, over this "
+                    f"deployment's limit of {cap}. It will crowd the art: {text[:70]!r}",
+                    obj=action))
+    return findings
+
+
 CHECKS = (
     check_image_agents_do_not_letter,
     check_style_does_not_letter,
     check_referenced_entities_are_armed,
     check_no_duplicate_names,
     check_panels_can_be_rendered,
+    check_onpage_text_house_rules,
 )
 
 
