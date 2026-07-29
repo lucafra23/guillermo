@@ -347,7 +347,7 @@ class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_sections = [MessageHistorySection]
     fieldsets = ACTION_FIELDSETS
 
-    @admin.action(description="Bulk edit text")
+    @admin.action(description="Bulk edit text", permissions=["change"])
     def bulk_edit_text(self, request, queryset):
         """Edit the words on many panels in one form, with the plate beside each one.
 
