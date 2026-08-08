@@ -404,19 +404,35 @@ class AdminActionsMixin:
                 obj.generate_voice(obj.PRESET_VOICE, user=request.user)
             self.message_user(request, "voice generated for item ID {}.".format(obj.id))
 
-    @admin.action(description="Generate Elements (step 2)")
+    @admin.action(description="Generate Elements")
     def generate_scene_elements(self, request, queryset):
         for obj in queryset:
             if Task.createTaskIfQueueEnabled(obj, settings.TASK_TYPE_GENERATE_SCENE_ELEMENTS, owner=request.user) is None:
                 pass
             self.message_user(request, "Generation task for elements started for scene: {}.".format(obj.name))
 
-    @admin.action(description="Generate Shots (step 3)")
+    @admin.action(description="Generate Shots")
     def generate_scene_actions(self, request, queryset):
         for obj in queryset:
             if Task.createTaskIfQueueEnabled(obj, settings.TASK_TYPE_GENERATE_SCENE_ACTIONS, owner=request.user) is None:
                 pass
             self.message_user(request, "Generation task for actions started for scene: {}.".format(obj.name))
+
+    @admin.action(description="Generate Voices")
+    def generate_scene_voices(self, request, queryset):
+        for obj in queryset:
+            if Task.createTaskIfQueueEnabled(obj, settings.TASK_TYPE_GENERATE_SCENE_VOICES, owner=request.user) is None:
+                # This block would run if queuing is disabled.
+                # You could add direct execution here if needed.
+                pass
+            self.message_user(request, "Generation task for voices started for scene: {}.".format(obj.name))
+
+    @admin.action(description="Generate Comics")
+    def generate_scene_comics(self, request, queryset):
+        for obj in queryset:
+            if Task.createTaskIfQueueEnabled(obj, settings.TASK_TYPE_GENERATE_SCENE_COMICS, owner=request.user) is None:
+                pass
+            self.message_user(request, "Generation task for comics started for scene: {}.".format(obj.name))
 
     @admin.action(description="Add me as author")
     def add_me_as_author(self, request, queryset):
@@ -424,7 +440,7 @@ class AdminActionsMixin:
             if obj.add_author(request.user):
                 self.message_user(request, f"You have been added as an author to story {obj.name}")
 
-    @admin.action(description="Generate Structure (step 1)" )
+    @admin.action(description="Sync Structure" )
     def extract_scene(self, request, queryset):
         for obj in queryset:
             if Task.createTaskIfQueueEnabled( obj, settings.TASK_TYPE_EXTRACT_SCENE, owner=request.user) is None:

@@ -1,5 +1,5 @@
 import base64
-
+from pydantic import BaseModel
 from google import genai
 import random
 import os
@@ -25,6 +25,7 @@ from task.models import Task, TaskHolder
 from PIL import Image
 
 from google.auth.credentials import Credentials
+from simple_history.models import HistoricalRecords
 
 # Create a mock credential that satisfies all internal SDK token fetches
 class MockVertexCredentials(Credentials):
@@ -48,8 +49,14 @@ class GetContentsMixin:
     PRESET_CHARACTER = "character"
     PRESET_WRITER = "writer"
     PRESET_REFINE_PROMPT = "refine_prompt"
-    PRESET_SCENE = "generate_scene"
+    PRESET_SYNC_SCENE = "generate_scene"
+    PRESET_WORKFLOW_OPTIMIZATION = "workflow_optimization"
     
+
+    @classmethod
+    def sync_prompt_categories(cls):
+        """Retrieves ACTION_CHOICES from the class, if it exists."""
+        return getattr(cls, "AGENT_PRESETS", [])
 
     @property
     def messages(self):
@@ -59,12 +66,133 @@ class GetContentsMixin:
         ).order_by('created_at')
 
     def get_contents(self, generate_self=True, preset=None,):
-         # remove generate self and add preset regenerate_image
-        parts = [self.context_text(generate_self=generate_self, preset=preset)]
-        if not generate_self or preset in [self.PRESET_REFINE, self.PRESET_COMIC]:
-            if hasattr(self, 'image') and self.image:
-                parts.append(self.image)
+        parts = []
+        if preset == settings.PRESET_INSTRUCTION:
+             message =  self.messages.exclude(preset=preset).last()
+             instructions =  [message.parts_instructions().values_list('text', flat=True).first()] if message else []
+             parts.append(f"system_instruction: {instructions}")
+             part_input =  [message.parts_input().values_list('text', flat=True).first()] if message else []
+             parts.append(f"retrieved_context and user_input: {part_input}")
+             part_output =  [message.parts_output().values_list('text', flat=True).first()] if message else []
+             parts.append(f"model_output: {part_output}")
+        elif preset == self.PRESET_WORKFLOW_OPTIMIZATION:
+             return [self.compile_workflow_dag()]
+        else:
+            if hasattr(self, 'context_text'):
+                parts = [self.context_text(generate_self=generate_self, preset=preset)]
+            if not generate_self or preset in [self.PRESET_REFINE, self.PRESET_COMIC]:
+                if hasattr(self, 'image') and self.image:
+                    parts.append(self.image)
         return [p for p in parts if p is not None and (not isinstance(p, str) or p.strip() != "")]
+
+    def compile_workflow_dag(self):
+        """
+        Recursively compiles the complete sequence of instructions, inputs, 
+        and outputs across the entire story, scene, and shot pipeline.
+        This structured trace maps the exact workflow state so that upstream 
+        agents can be optimized against downstream execution quality.
+        """
+        trace = []
+        
+        def format_message_trace(msg):
+            msg_parts = []
+            msg_parts.append(f"### Message ID: {msg.id} (Agent: {msg.agent.name if msg.agent else 'None'}, Preset: {msg.preset or 'None'})")
+            
+            instrs = [p.text for p in msg.parts_instructions() if p.text]
+            if instrs:
+                msg_parts.append("**System Instructions/Prompts:**")
+                for inst in instrs:
+                    msg_parts.append(f"```\n{inst.strip()}\n```")
+                    
+            inputs = []
+            for p in msg.parts_input():
+                if p.text:
+                    inputs.append(p.text.strip())
+                elif p.image:
+                    inputs.append(f"[Input Reference Image: {p.image.url}]")
+            if inputs:
+                msg_parts.append("**Inputs:**")
+                msg_parts.append("\n".join(inputs))
+                
+            outputs = []
+            for p in msg.parts_output():
+                if p.text:
+                    outputs.append(p.text.strip())
+                elif p.image:
+                    msg_parts.append(f"[Generated Image Output: {p.image.url}]")
+            if outputs:
+                msg_parts.append("**Generated Outputs:**")
+                msg_parts.append("\n".join(outputs))
+                
+            return "\n\n".join(msg_parts)
+
+        model_name = self.__class__.__name__
+        
+        if model_name == 'Story':
+            trace.append(f"# WORKFLOW DAG FOR STORY: {self.name} (ID: {self.id})")
+            trace.append("### LIVE STORY DATABASE FIELDS\n"
+                         f"**Live Plot/Prompt (`prompt`):**\n```markdown\n{self.prompt or ''}\n```\n"
+                         f"**Live Prompt Refine (`prompt_refine`):**\n```markdown\n{self.prompt_refine or ''}\n```")
+            
+            # Trace human overrides using simple-history records
+            if hasattr(self, 'history') and self.history.exists():
+                history_logs = []
+                for h in self.history.all()[:3]:  # Capture last 3 revisions
+                    history_logs.append(f"- Saved on {h.history_date} by {h.history_user or 'System'} (Action: {h.get_history_type_display()})")
+                trace.append("### STORY FIELD REVISION HISTORY\n" + "\n".join(history_logs))
+
+            trace.append("### STORY CHAT GENERATION TRACE")
+            for msg in self.messages:
+                trace.append(format_message_trace(msg))
+            for scene in self.scenes.all():
+                trace.append(scene.compile_workflow_dag())
+                
+        elif model_name == 'Scene':
+            trace.append(f"## WORKFLOW DAG FOR SCENE: {self.name} (ID: {self.id})")
+            trace.append("### LIVE SCENE DATABASE FIELDS\n"
+                         f"**Live Scene Plot (`prompt_plot`):**\n```markdown\n{self.prompt_plot or ''}\n```\n"
+                         f"**Live Scene Draft (`prompt_draft`):**\n```markdown\n{self.prompt_draft or ''}\n```\n"
+                         f"**Live Scene Shots (`prompt`):**\n```markdown\n{self.prompt or ''}\n```")
+            
+            # Trace human overrides using simple-history records
+            if hasattr(self, 'history') and self.history.exists():
+                history_logs = []
+                for h in self.history.all()[:3]:  # Capture last 3 revisions
+                    history_logs.append(f"- Saved on {h.history_date} by {h.history_user or 'System'} (Action: {h.get_history_type_display()})")
+                trace.append("### SCENE FIELD REVISION HISTORY\n" + "\n".join(history_logs))
+
+            trace.append("### SCENE CHAT GENERATION TRACE")
+            for msg in self.messages:
+                trace.append(format_message_trace(msg))
+                
+            cast = self.get_cast()
+            if cast.exists():
+                trace.append("### Cast Reference Asset Generation Trace:")
+                for char in cast:
+                    for msg in char.messages:
+                        trace.append(f"#### Character Asset: {char.name}\n" + format_message_trace(msg))
+                        
+            locs = self.get_locations()
+            if locs.exists():
+                trace.append("### Location Reference Asset Generation Trace:")
+                for loc in locs:
+                    for msg in loc.messages:
+                        trace.append(f"#### Location Asset: {loc.name}\n" + format_message_trace(msg))
+                        
+            for shot in self.shots():
+                trace.append(shot.compile_workflow_dag())
+                
+        elif model_name == 'Action':  # Shot
+            trace.append(f"### WORKFLOW DAG FOR SHOT: {self.name} (Order: {self.order}, Type: {self.shot_type})")
+            for msg in self.messages:
+                trace.append(format_message_trace(msg))
+                
+        elif model_name in ['Character', 'Background', 'Prop']:
+            trace.append(f"### WORKFLOW DAG FOR ELEMENT: {self.name} ({model_name})")
+            for msg in self.messages:
+                trace.append(format_message_trace(msg))
+                
+        return "\n\n---\n\n".join([t for t in trace if t])
 
 
     def get_agent(self, output_type):
@@ -112,7 +240,7 @@ class GetContentsMixin:
         return getattr(self, target_field)
     
 
-    def generate_scene(self, preset=PRESET_SCENE, user=None):
+    def generate_scene(self, preset=PRESET_SYNC_SCENE, user=None):
         agent = Agent.objects.filter(schema=settings.SCHEMA_SCENE).first()
         out = agent.generate(self, preset=preset, user=user, target_field="scene")
         return out
@@ -125,13 +253,21 @@ class GetContentsMixin:
             self.save()
         return out
     
-    def generate_text(self, preset=PRESET_REFINE_PROMPT, message=None,  target_field="prompt",  agent=None, user=None):
+    def generate_text(self, preset=PRESET_REFINE_PROMPT, message=None, instructions=[], target_field="prompt", schema=None, agent=None, user=None):
         if agent is None:
             agent = self.get_agent(Agent.OUTPUT_TYPE_TEXT)
-        out = agent.generate(self, preset=preset, message_part=message, user=user, target_field=target_field)
-        if out is not None:
+        out = agent.generate(self, preset=preset, message_part=message, instructions=instructions, schema=schema, user=user, target_field=target_field)
+        
+        if out is not None and isinstance(out, str) and out.strip() != "":
             setattr(self, target_field, out)
             self.save()
+        if isinstance(out, dict): 
+            if target_field in out:
+                setattr(self, target_field, out[target_field])
+                self.save()
+            elif "output" in out:   
+                setattr(self, target_field, out["output"])
+                self.save()
         return out
     
     def refine_prompt(self, save=True, user=None, agent=None):
@@ -141,6 +277,49 @@ class GetContentsMixin:
             self.image = out
             self.save()
         return out
+
+    def task_from_action(self, action_type, user, message=None):
+        """
+        Parses an action_type string to extract the task_type and an optional preset.
+        The expected format is 'task_type_preset_preset_name' or just 'task_type'. It
+        can also include a target field like: 'task_type_preset_preset_name_target_field_name'
+        """
+        parts = action_type.split('-preset-', 1)
+        task_type = parts[0]
+        preset_part = parts[1] if len(parts) > 1 else None
+
+        preset = None
+        target_field = None
+
+        schema = None
+
+        if preset_part:
+            schema_parts = preset_part.split('-schema-', 1)
+            preset_part = schema_parts[0]
+            if len(schema_parts) > 1:
+                schema = schema_parts[1].strip('-')
+
+            target_parts = preset_part.split('-target-', 1)
+            preset = target_parts[0].strip('-')
+            if len(target_parts) > 1:
+                target_field = target_parts[1].strip('-')
+
+        payload = {}
+        if schema:
+            payload['schema'] = schema
+        if preset:
+            payload['preset'] = preset
+        if target_field:
+            payload['target_field'] = target_field
+        if message:
+            payload['message'] = message
+        task = Task.createTaskIfQueueEnabled(
+                subject=self,
+                task_type=task_type,
+                payload=payload if payload else None,
+                owner=user
+            )
+        return task
 
 class AgentModel(models.Model):
     name = models.CharField(_("name"), max_length=100, default="name")
@@ -154,8 +333,16 @@ class GoogleVoice(models.Model):
     def __str__(self):
         return "{}".format(self.name)
 
+class PromptCategory(models.Model):
+    name = models.CharField(_("name"), max_length=100, default="name")
+    slug = models.SlugField(_("slug"), max_length=100, default="slug")
+
+    def __str__(self):
+        return "{}".format(self.name)
+
 
 class Prompt(models.Model):
+    
     CHOICES = (
         ("general", _("General")),
         (GetContentsMixin.PRESET_REFINE, _("Refine")),
@@ -165,20 +352,24 @@ class Prompt(models.Model):
         (GetContentsMixin.PRESET_WRITER, _("Writer")),
         (GetContentsMixin.PRESET_CHARACTER, _("Character")),
         (GetContentsMixin.PRESET_REFINE_PROMPT, _("Refine Prompt")),
-        (GetContentsMixin.PRESET_SCENE, _("Sync Scene")),
+        (GetContentsMixin.PRESET_SYNC_SCENE, _("Sync Scene")),
     )
     
     name= models.CharField(_("name"), max_length=100, default="name")
     prompt = models.TextField(null=True, blank=True)
     category = models.CharField(max_length=100, default="general", choices=CHOICES)
+    categories = models.ManyToManyField(PromptCategory, verbose_name=_("categories"), blank=True)
     content_types = models.ManyToManyField(ContentType, blank=True)
     is_global = models.BooleanField(_("is global"), default=False)
     order = models.IntegerField(_("order"), default=0)
-
+    history = HistoricalRecords()
 
     @classmethod
     def instructions(cls, preset, obj):
+
         from_preset =  [item.prompt for item in cls.objects.filter(category=preset, is_global=True) ]
+        from_preset.extend([item.prompt for item in cls.get_from_categories(preset) ])
+
         content_type = ContentType.objects.get_for_model(obj.__class__)
         from_content = [item.prompt for item in cls.objects.filter(content_types=content_type, is_global=True)]
         out = from_preset + from_content
@@ -192,6 +383,11 @@ class Prompt(models.Model):
         content_type = ContentType.objects.get_for_model(obj.__class__)
         from_content = [item.prompt for item in cls.objects.filter(content_types=content_type)]
         return from_content
+
+    @classmethod
+    def get_from_categories(cls, slug):
+        return cls.objects.filter(categories__slug=slug, is_global=True)
+
 
     def __str__(self):
         return "{}".format(self.name)
@@ -233,8 +429,10 @@ class Agent(models.Model):
         choices=settings.AGENT_SCHEMA_CHOICES
     )
 
-    def get_schema_class(self):
-        schema_path = settings.AGENT_SCHEMAS.get(self.schema)
+    def get_schema_class(self, schema=None):
+        if schema is None:
+            schema = self.schema
+        schema_path = settings.AGENT_SCHEMAS.get(schema)
         return import_string(schema_path) if schema_path else None
 
     def get_genai_client(self, user):
@@ -322,23 +520,6 @@ class Agent(models.Model):
             file=filepath_relative,
             name=name
         )
-        return out
-    
-    def generate_text(self, preset, prompt_obj, message=None, user=None, contents=None):
-        from google.genai import types
-        instructions = self.get_instructions(user=user, preset=preset, obj=prompt_obj)
-        message.set_instructions(instructions)
-        config = types.GenerateContentConfig(
-            system_instruction=self.get_instructions(user=user, preset=preset, obj=prompt_obj),
-        )
-        with self.get_genai_client(user) as client:
-            response = client.models.generate_content(
-                model=self.agent_model.name,
-                contents=contents,
-                config=config
-            )
-            self.save_usage(user, response, obj=prompt_obj, preset=preset)
-            out = self.extract_text(response, prompt_obj)
         return out
 
     def generate_image(self, preset, prompt_obj, message=None, user=None, contents=None):
@@ -470,9 +651,44 @@ class Agent(models.Model):
         instructions = [ item.prompt for item in self.instructions.all()]
         if preset:
             instructions += Prompt.instructions(preset, obj)
+            
         return [i for i in instructions if i and str(i).strip() != ""]
+
+    def generate_text(self, preset, prompt_obj, instructions=[], message=None, schema=None, user=None, contents=None):
+        from google.genai import types
+        instructions.extend(self.get_instructions(user=user, preset=preset, obj=prompt_obj))
+        message.set_instructions(instructions)
+        args = {
+            "model": self.agent_model.name,
+            "contents":contents                    
+        }
+        schema_class = self.get_schema_class(schema)
+        if len(instructions) > 0 or schema is not None:
+            config_args = {}
+            if schema is not None:
+                config_args["response_schema"] = schema_class
+                config_args["response_mime_type"] = "application/json"
+            if len(instructions) > 0:
+                config_args["system_instruction"] = instructions
+            config = types.GenerateContentConfig(
+                **config_args
+            )
+            args["config"] = config
+        
+        with self.get_genai_client(user) as client:
+            response = client.models.generate_content(**args)
+            self.save_usage(user, response, obj=prompt_obj, preset=preset)
+            if schema is not None:
+                data = schema_class.model_validate_json(response.text)
+                out = data.sync_model(prompt_obj) if hasattr(data, "sync_model") else data
+            else:
+                out = self.extract_text(response, prompt_obj)
+        return out
     
     def generate_structured(self, preset, prompt_obj, message=None, user=None, contents=None):
+        """
+        an agent with a defined schema
+        """
         from google.genai import types
         schema_class = self.get_schema_class()
         if not schema_class:
@@ -497,15 +713,16 @@ class Agent(models.Model):
             out = data.sync_model(prompt_obj) if hasattr(data, "sync_model") else data
         return out
 
-    def generate(self, obj, preset=None, user=None, target_field=None, message_part=None):
+    def generate(self, obj, preset=None, user=None, instructions=[], target_field=None, schema=None, message_part=None):
         parts = obj.get_contents(generate_self=True, preset=preset)
         if message_part:
-            parts.append(message_part)
+            parts.insert(0, message_part)
         message = Message.create_message(
             obj,
             agent=self,
             user=user,
             target_field=target_field,
+            preset=preset
         )
         message.set_input(parts)
         contents = Message.to_google_types(parts)
@@ -519,8 +736,9 @@ class Agent(models.Model):
         elif self.output_type == self.OUTPUT_TYPE_IMAGE:
             out = self.generate_image(preset, obj, message=message, user=user, contents=contents)
         elif self.output_type == self.OUTPUT_TYPE_TEXT:
-            out = self.generate_text(preset, obj, message=message, user=user, contents=contents)
+            out = self.generate_text(preset, obj, message=message, instructions=instructions,schema=schema, user=user, contents=contents)
         elif self.output_type == self.OUTPUT_TYPE_STRUCTURED:
+            # in structured schema is defined in the agent
             out = self.generate_structured(preset, obj, message=message, user=user, contents=contents)
         message.set_output(out)
         return out
@@ -568,7 +786,7 @@ class AgentProfile(models.Model):
     def __str__(self):
         return "{}".format(self.user.username)
 
-class Message(models.Model):
+class Message(models.Model, GetContentsMixin, TaskHolder):
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField()
     content_object = GenericForeignKey('content_type', 'object_id')
@@ -576,7 +794,11 @@ class Message(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name=_("user"), on_delete=models.SET_NULL, null=True, blank=True, related_name='agent_messages')
     target_field = models.CharField(_("target field"), max_length=100, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+    preset = models.CharField(_("preset"), max_length=1024, blank=True, null=True)
+
+    AGENT_PRESETS =settings.COMMON_TEXT_AGENT_PRESETS
+    ACTION_CHOICES =settings.COMMON_TEXT_ACTION_CHOICES
+        
     class Meta:
         ordering = ['-created_at']
 
@@ -588,16 +810,32 @@ class Message(models.Model):
 
     def parts_instructions(self):
         return self.parts.filter(part_type=MessagePart.PART_TYPE_INSTRUCTIONS).order_by('order')
+    
+    def __str__(self):
+        return f"{self.id}"
+
+    def get_contents(self, generate_self=True, preset=None):
+        if preset == settings.PRESET_INSTRUCTION:
+             parts = []
+             message =  self
+             instructions =  [message.parts_instructions().values_list('text', flat=True).first()] if message else []
+             parts.append(f"system_instruction: {instructions}")
+             part_input =  [message.parts_input().values_list('text', flat=True).first()] if message else []
+             parts.append(f"retrieved_context and user_input: {part_input}")
+             part_output =  [message.parts_output().values_list('text', flat=True).first()] if message else []
+             parts.append(f"model_output: {part_output}")
+        return [p for p in parts if p is not None and (not isinstance(p, str) or p.strip() != "")]
 
     @classmethod
-    def create_message(cls, content_object, agent=None, user=None, target_field=""):
+    def create_message(cls, content_object, agent=None, user=None, preset=None, target_field=""):
         message = cls.objects.create(
             content_object=content_object,
             agent=agent,
             user=user,
+            preset=preset,
             target_field=target_field
         )
-        return message#
+        return message
     
     @classmethod
     def to_google_types(cls, parts):
@@ -677,8 +915,10 @@ class Message(models.Model):
         """Creates a single output MessagePart from the generation result."""
         if output_data is None:
             return
-
-        self._create_part(output_data, order=999, part_type=MessagePart.PART_TYPE_OUTPUT)
+        if isinstance(output_data, dict):
+            self._create_parts_from_dict(output_data, MessagePart.PART_TYPE_OUTPUT)
+        else:
+            self._create_part(output_data, order=999, part_type=MessagePart.PART_TYPE_OUTPUT)
 
 class MessagePart(models.Model):
     PART_TYPE_INPUT = 'input'

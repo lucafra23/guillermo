@@ -1,5 +1,17 @@
 {% load i18n unfold %}
+
 {% for message in messages %}
+    <div class="text-center my-2 flex items-center justify-center gap-2">
+        <a href="{% url 'admin:agent_message_changelist' %}?id__exact={{ message.id }}" target="_blank" class="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400 transition-colors">
+            <span class="material-symbols-outlined text-sm">link</span>
+            Message #{{ message.id }} 
+        </a>
+        <span class="text-[10px] text-gray-300 dark:text-gray-700">•</span>
+        <span class="text-[11px] text-gray-400 dark:text-gray-500" title="{{ message.created_at|date:'Y-m-d H:i:s' }}">
+            {{ message.created_at|date:"Y-m-d H:i" }}
+        </span>
+    </div>
+
     {# Instructions Part #}
     {% with instructions=message.parts_instructions %}
         {% if instructions %}
@@ -7,21 +19,31 @@
                 <div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center">
                     <span class="material-symbols-outlined text-lg text-gray-500 dark:text-gray-400">integration_instructions</span>
                 </div>
-                <div class="bg-yellow-50 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 rounded-lg p-3 max-w-lg space-y-2 border border-yellow-200 dark:border-yellow-800/50">
-                    {% for part in instructions %}<p class="text-xs italic">{{ part.text }}</p>{% endfor %}
+                <div class="bg-gray-100 dark:bg-gray-900/60 p-3 rounded-lg max-w-lg border border-gray-200/80 dark:border-gray-800">
+                    <div class="bg-white dark:bg-gray-800 text-yellow-800 dark:text-yellow-200 rounded-md p-3 space-y-2 border border-yellow-200 dark:border-yellow-800/50 shadow-sm">
+                        {% for part in instructions %}<p class="my-2">{{ part.text }}</p>{% endfor %}
+                    </div>
                 </div>
             </div>
         {% endif %}
     {% endwith %}
 
     {# User Input Part #}
-    <div class="flex items-start gap-3 my-3">
-        <div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center font-bold text-sm text-gray-600 dark:text-gray-300">
-            {{ message.user.username|first|upper }}
-        </div>
-        <div class="bg-white dark:bg-gray-800/80 rounded-lg p-3 my-3 max-w-lg space-y-3 border border-gray-200 dark:border-gray-700/50">
+    <div class="flex items-start gap-3 my-3 justify-end">
+        <div class="flex-grow max-w-lg bg-gray-100 dark:bg-gray-900/60 rounded-lg p-3 space-y-3 border border-gray-200/80 dark:border-gray-800">
+            {% if message.preset %}
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider rounded-full bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+                        {{ message.preset }}
+                    </span>
+                    <a href="{% url 'admin:agent_message_change' message.id %}" target="_blank" title="{% trans 'View in admin' %}" class="text-gray-400 hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400 transition-colors">
+                        <span class="material-symbols-outlined text-base">open_in_new</span>
+                    </a>
+                </div>
+            {% endif %}
+
             {% for part in message.parts_input %}
-                <div class="message-part">
+                <div class="message-part bg-white dark:bg-gray-800 p-3 rounded-md shadow-sm border border-gray-200/60 dark:border-gray-700/50 my-2">
                     {% if part.text %}
                         <div class="text-sm expandable-text">
                             {% if part.text|length > 200 %}
@@ -32,7 +54,7 @@
                                     {{ part.text|linebreaksbr }} <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read less" %}</button>
                                 </div>
                             {% else %}
-                                <p>{{ part.text|linebreaksbr }}</p>
+                                <p class="my-2">{{ part.text|linebreaksbr }}</p>
                             {% endif %}
                         </div>
                     {% endif %}
@@ -42,7 +64,7 @@
                         {% endwith %}
                     {% endif %}
                     {% if part.json %}
-                        <pre class="text-xs bg-black/5 dark:bg-black/20 p-2 rounded-md whitespace-pre-wrap">{{ part.json|json_script:"json-data" }}</pre>
+                        <pre class="text-xs bg-gray-50 dark:bg-black/20 p-2 rounded-md whitespace-pre-wrap border border-gray-100 dark:border-gray-800">{{ part.json|json_script:"json-data" }}</pre>
                     {% endif %}
                 </div>
             {% endfor %}
@@ -50,21 +72,21 @@
     </div>
 
     {# Agent Output Part #}
-    <div class="flex items-start gap-3 justify-end my-3">
-        <div class="bg-primary-50 dark:bg-primary-900/30 text-primary-800 dark:text-primary-100 rounded-lg p-3 max-w-lg space-y-3 my-3">
+    <div class="flex items-start gap-3 my-3">
+        <div class="bg-gray-100 dark:bg-gray-900/60 rounded-lg p-3 max-w-lg space-y-3 border border-gray-200/80 dark:border-gray-800">
             {% for part in message.parts_output %}
-                <div class="message-part">
+                <div class="message-part bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 p-3 rounded-md shadow-sm border border-gray-200/60 dark:border-gray-700/50 my-2">
                     {% if part.text %}
                         <div class="prose prose-sm dark:prose-invert max-w-none expandable-text">
                             {% if part.text|length > 200 %}
-                                <div class="summary-text">
+                                <div class="my-2 summary-text">
                                     {{ part.text|slice:":200"|safe }}... <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read more" %}</button>
                                 </div>
-                                <div class="full-text" style="display: none;">
+                                <div class="my-2 full-text" style="display: none;">
                                     {{ part.text|safe }} <button type="button" class="toggle-text-button text-primary-600 font-semibold hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300">{% trans "Read less" %}</button>
                                 </div>
                             {% else %}
-                                <p>{{ part.text|safe }}</p>
+                                <p class="my-2">{{ part.text|safe }}</p>
                             {% endif %}
                         </div>
                     {% endif %}
@@ -76,9 +98,6 @@
                     {% if part.file %}<a href="{{ part.file.url }}" download class="text-primary-600 hover:underline">{% trans "Download File" %}</a>{% endif %}
                 </div>
             {% endfor %}
-        </div>
-        <div class="w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900/50 flex-shrink-0 flex items-center justify-center">
-            <span class="material-symbols-outlined text-indigo-600 dark:text-indigo-300">smart_toy</span>
         </div>
     </div>
 {% empty %}

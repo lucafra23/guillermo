@@ -61,6 +61,9 @@ INSTALLED_APPS = [
     'unfold.contrib.import_export',
     'django_celery_beat',
     'crispy_forms',
+    "unfold.contrib.simple_history",  # Makes the history UI match Unfold's Tailwind theme
+    "simple_history",
+    "unfold_markdown"
 ]
 
 
@@ -319,7 +322,7 @@ UNFOLD = {
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASE_TYPE = os.getenv("DATABASE_TYPE", "postgresql")
+DATABASE_TYPE = os.getenv("DATABASE_TYPE", "sqlite")
 
 if DATABASE_TYPE == "sqlite":
     DATABASES = {
@@ -332,11 +335,11 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv("DB_NAME", "guillermo"),
-            'USER': os.getenv("DB_USER", "postgres"),
-            'PASSWORD': os.getenv("DB_PASSWORD", ""),
-            'HOST': os.getenv("DB_HOST", "localhost"),
-            'PORT': os.getenv("DB_PORT", "5432"),
+            'NAME': os.getenv("POSTGRES_DB", "guillermo"),
+            'USER': os.getenv("POSTGRES_USER", "postgres"),
+            'PASSWORD': os.getenv("POSTGRES_PASSWORD", ""),
+            'HOST': os.getenv("POSTGRES_HOST", "localhost"),
+            'PORT': os.getenv("POSTGRES_PORT", "5432"),
         }
     }
 
@@ -448,7 +451,7 @@ TASK_DELEGATES = {
     TASK_TYPE_GENERATE_COMIC: 'scene.tasks.tasks.TaskGenerateComic',
     TASK_TYPE_GENERATE_VOICE: 'scene.tasks.tasks.TaskGenerateVoice',
     
-    TASK_TYPE_GENERATE_TEXT: 'scene.tasks.tasks.TaskGenerateText',
+    TASK_TYPE_GENERATE_TEXT: 'agent.tasks.TaskGenerateText',
 
     TASK_TYPE_GENERATE_SCENE: 'scene.tasks.tasks.TaskGenerateScene',
 
@@ -456,7 +459,7 @@ TASK_DELEGATES = {
     TASK_TYPE_GENERATE_SCENE_ACTIONS: 'scene.tasks.tasks.TaskGenerateShots',
     
     TASK_TYPE_GENERATE_SCENE_VOICES: 'scene.tasks.tasks.TaskGenerateVoices',
-    TASK_TYPE_GENERATE_SCENE_COMICS: 'scene.tasks.tasks.TaskGenerateComic',
+    TASK_TYPE_GENERATE_SCENE_COMICS: 'scene.tasks.tasks.TaskGenerateComics',
 
     TASK_TYPE_EXTRACT_SCENE: 'scene.tasks.tasks.TaskExtractScene',
     # sync
@@ -500,14 +503,50 @@ STATIC_URL = 'static/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 # Agent Structured Output Schema Settings
-SCHEMA_MULTI_SCENE = "multi_scene"
+SCHEMA_MULTI_SCENE = "multiscene"
 SCHEMA_SCENE = "scene"
+SCHEMA_OUTPUT_WITH_MESSAGE = "outwithmsg"
+SCHEMA_CREATE_INSTRUCTIONS = "create_instructions"
+
+SCHEMA_STORY_SCENES = "story_scenes"
+
 AGENT_SCHEMA_CHOICES = [
     (SCHEMA_MULTI_SCENE, _("Multi Scene Storyboard")),
     (SCHEMA_SCENE, _("Single Scene Storyboard")),
+    (SCHEMA_OUTPUT_WITH_MESSAGE, _("Output With Message")),
+    (SCHEMA_CREATE_INSTRUCTIONS, _("Create Instructions")),
+    (SCHEMA_STORY_SCENES, _("Story Scenes")),
+
 ]
 
 AGENT_SCHEMAS = {
     SCHEMA_MULTI_SCENE: "scene.schemas.MultiSceneSchema",
     SCHEMA_SCENE : "scene.schemas.SceneSchema",    
+    SCHEMA_OUTPUT_WITH_MESSAGE: "scene.schemas.OutputWithMessageSchema",
+    SCHEMA_CREATE_INSTRUCTIONS: "scene.schemas.CreateInstructionsSchema",
+    SCHEMA_STORY_SCENES: "scene.schemas.StoryScenesSchema",
+        
 }
+
+PRESET_INFO =  "info"
+PRESET_INSTRUCTION =  "instruction"
+
+
+COMMON_TEXT_AGENT_PRESETS = (
+    (PRESET_INFO, _("Last message")),
+    (PRESET_INSTRUCTION, _("Instruction")),        
+)
+ACTION_INFO = f"generate_text-preset-{PRESET_INFO}"
+ACTION_INSTRUCTION = f"generate_text-preset-{PRESET_INSTRUCTION}-schema-{SCHEMA_OUTPUT_WITH_MESSAGE}"
+ACTION_INSTRUCTION_COMMIT = f"generate_text-preset-{PRESET_INSTRUCTION}-schema-{SCHEMA_CREATE_INSTRUCTIONS}"
+
+COMMON_TEXT_ACTION_CHOICES =(
+    (ACTION_INFO, _("Info")),
+    (ACTION_INSTRUCTION, _("Instruction")),
+    (ACTION_INSTRUCTION_COMMIT, _("Instruction Commit")),
+)
+
+SYSTEM_PRESETS = [
+    PRESET_INFO,
+    PRESET_INSTRUCTION,
+] 

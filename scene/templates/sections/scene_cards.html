@@ -10,7 +10,7 @@
             this.isLoading = true;
             this.isLoaded = false;
             const container = this.$refs.content;
-            container.innerHTML = `<div class='flex justify-center items-center p-6 col-span-full'><span class='material-symbols-outlined animate-spin text-4xl text-primary-500'>progress_activity</span></div>`;
+            container.innerHTML = `<div class='flex flex-col items-center justify-center p-12 text-center w-full col-span-full gap-2'><span class='material-symbols-outlined animate-spin text-4xl text-primary-600 dark:text-primary-400'>progress_activity</span><span class='text-sm text-gray-500 dark:text-gray-400 font-medium animate-pulse'>{% trans "Loading cards..." %}</span></div>`;
             
             const baseUrl = window.location.pathname.split('/').slice(0, 4).join('/');
             const url = `${baseUrl}/refresh-section/{{ section_key }}/{{ content_type_id }}/{{ instance.pk }}/`;

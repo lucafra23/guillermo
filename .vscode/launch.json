@@ -4,9 +4,8 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-        
         {
-            "name": "Python Debugger: Django",
+            "name": "Argo",
             "type": "debugpy",
             "request": "launch",
             "args": [
@@ -19,7 +18,29 @@
             "program": "${workspaceFolder}/manage.py"
         },
         {
-            "name": "Python: Celery",
+            "name": "Nautilus",
+            "type": "debugpy",
+            "request": "launch",
+            "autoStartBrowser": false,
+            "program": "${workspaceFolder}/run_nautilus.py"
+        },
+
+
+        {
+            "name": "Guillermo",
+            "type": "debugpy",
+            "request": "launch",
+            "args": [
+                "runserver",
+                "localhost:8080",
+                "--noreload"
+            ],
+            "django": true,
+            "autoStartBrowser": false,
+            "program": "${workspaceFolder}/manage.py"
+        },
+        {
+            "name": "Guillermo: Celery",
             "type": "debugpy",
             "request": "launch",
             "module": "celery",
@@ -37,7 +58,7 @@
             ]
         },
                 {
-            "name": "Python: Celery Beat",
+            "name": "Guillermo: Celery Beat",
             "type": "debugpy",
             "request": "launch",
             "module": "celery",
@@ -53,19 +74,8 @@
                 "django"
             ]
         },
-          {
-            "name": "Migrate",
-            "type": "debugpy",
-            "request": "launch",
-            "args": [
-                "migrate",
-            ],
-            "django": true,
-            "autoStartBrowser": false,
-            "program": "${workspaceFolder}/manage.py"
-        },
         {
-            "name": "MakeMigration",
+            "name": "Guillermo MakeMigration",
             "type": "debugpy",
             "request": "launch",
             "args": [
@@ -75,5 +85,17 @@
             "autoStartBrowser": false,
             "program": "${workspaceFolder}/manage.py"
         },
+          {
+            "name": "Guillermo Migrate",
+            "type": "debugpy",
+            "request": "launch",
+            "args": [
+                "migrate",
+            ],
+            "django": true,
+            "autoStartBrowser": false,
+            "program": "${workspaceFolder}/manage.py"
+        },
+        
     ]
 }

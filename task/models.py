@@ -147,6 +147,8 @@ class Task(models.Model):
         return self.TASK_STATUS_DICT[self.status]
 
     def type_label(self):
+        if self.task_type not in self.TASK_TYPE_DICT:
+            return self.task_type
         return self.TASK_TYPE_DICT[self.task_type]
 
     def is_processable(self):
@@ -161,7 +163,6 @@ class Task(models.Model):
 
     def process(self, countdown=0, timestamp=None):
         from .tasks import process_task
-        process_task.apply_async(kwargs={'task_id': self.id}, countdown=countdown)
         if timestamp:
             # Create a one-off schedule for the specified timestamp
             schedule, _ = ClockedSchedule.objects.get_or_create(

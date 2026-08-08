@@ -20,3 +20,5 @@ django-import-export
 django-celery-beat
 django-crispy-forms
 audiostretchy[all]
+django-simple-history
+django-unfold-markdown

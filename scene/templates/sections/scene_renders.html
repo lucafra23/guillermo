@@ -9,6 +9,7 @@
         loadSection() {
             if (this.isLoaded || this.isLoading) return;
             this.isLoading = true;
+            this.$refs.content.innerHTML = `<div class='flex flex-col items-center justify-center p-12 text-center w-full col-span-full gap-2'><span class='material-symbols-outlined animate-spin text-4xl text-primary-600 dark:text-primary-400'>progress_activity</span><span class='text-sm text-gray-500 dark:text-gray-400 font-medium animate-pulse'>{% trans "Loading renders..." %}</span></div>`;
             const url = `{{ request.path }}refresh-section/{{ section_key }}/{{ content_type_id }}/{{ instance.pk }}/`;
             fetch(url)
                 .then(response => response.json())
@@ -40,9 +41,6 @@
 
     <div x-show="!isCollapsed" class="border-t border-gray-200 dark:border-gray-800" style="display: none;">
         <div x-ref="content" class="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div x-show="isLoading" class="flex items-center justify-center p-6 col-span-full">
-                <span class="material-symbols-outlined text-4xl animate-spin text-primary-500">progress_activity</span>
-            </div>
         </div>
     </div>
 </div>

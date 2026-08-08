@@ -10,16 +10,19 @@ from django.urls import path, reverse
 from django import forms
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
-
+from agent.sections import MessageHistorySection
+from simple_history.admin import SimpleHistoryAdmin
+from agent.sections import AjaxSectionAdminMixin, MessageHistorySection
 from django.conf import settings
 from task.models import Task
 from unfold.admin import StackedInline
-from .models import ActionOrganizer, Character, Scene, Action, Background, SceneOrganizer, StoryGroup, Style, Prop, ComicAction, RenderItem, VideoAction, Render, Story, StoryProfile, Voice, VoiceAction, Author, Nudge, ContactRequest, WorkShop, Sync, SyncItem
-from .admin_utils import AjaxTaskModelAdmin, AdminLinker, handle_ajax_field_save
+from .models import ActionOrganizer, Character, Scene, Preset, Action, Background, SceneOrganizer, StoryGroup, Style, Prop, ComicAction, RenderItem, VideoAction, Render, Story, StoryProfile, Voice, VoiceAction, Author, Nudge, ContactRequest, WorkShop, Sync, SyncItem
+from .admin_utils import AdminLinker
+from agent.admin_utils import AjaxTaskModelAdmin
 from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
 from agent.models import Message
-from .sections import AuthorSection, SceneSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection, MessageHistorySection, MarkDownSection
+from .sections import AuthorSection, ElementSection, SceneSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection, MarkDownSection, ScriptSection
 from .mixins import ACTION_FIELDSETS, ELEMENT_FIELDSETS, SceneFilterMixin, StaffReadOnlyMixin, StoryFilterMixin, ViewYourOwnMixin, PromptPreviewMixin, AdminActionsMixin
 from unfold.sections import TableSection, TemplateSection, render_to_string
 from rangefilter.filters import NumericRangeFilter
@@ -35,65 +38,6 @@ from django.contrib.auth.models import User
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from unfold.decorators import action
         
-class AjaxSectionAdminMixin:
-    def get_urls(self):
-        urls = super().get_urls()
-        custom_urls = [
-            path(
-                'ajax-section-update/',
-                self.admin_site.admin_view(self.ajax_section_update_view),
-                name='ajax_section_update',
-            ),
-        ]
-        
-        # Discover and add URLs from sections
-        if hasattr(self, "list_sections"):
-            for section_class in self.list_sections:
-                if hasattr(section_class, "get_section_urls"):
-                    section_instance = section_class(request=None, instance=None)
-                    section_urls = section_instance.get_section_urls(self)
-                    custom_urls.extend(section_urls)
-        return custom_urls + urls
-
-    def ajax_section_update_view(self, request):
-        if request.method != "POST":
-            return JsonResponse({"error": "Method not allowed"}, status=405)
-        
-        model_label = request.POST.get("_model_label")
-        object_id = request.POST.get("_id")
-        field_name = request.POST.get("_field")
-        value = request.POST.get("_value") or ""
-
-        try:
-            model = apps.get_model(model_label)
-            obj = get_object_or_404(model, pk=object_id)
-            
-            # Basic validation: ensure the field exists
-            if not hasattr(obj, field_name):
-                return JsonResponse({"error": f"Invalid field: {field_name}"}, status=400)
-
-            handle_ajax_field_save(obj, field_name, value)
-
-            # Return refresh data for immediate UI updates
-            refresh_data = {}
-            refresh_keys = [field_name]
-            # Convention: if an image field is updated, also try to refresh the 'pic' display helper
-            if hasattr(obj, 'pic'):
-                refresh_keys.append('pic')
-            
-            for k in refresh_keys:
-                attr = getattr(obj, k, None)
-                if callable(attr):
-                    refresh_data[k] = str(attr())
-                else:
-                    refresh_data[k] = str(attr) if attr is not None else ""
-
-            return JsonResponse({
-                "status": "success",
-                "refresh": refresh_data
-            })
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=400)
 
 
 class PromptPreviewSection(TemplateSection):
@@ -131,20 +75,29 @@ class AuthorInline(StackedInline):
     collapsible = True
     autocomplete_fields = ['user']
 
+class PlotSection(MarkDownSection):
+    field_name = "prompt_plot"
+    title = "Plot"
+    key = "plot"
+    
+class DraftSection(MarkDownSection):
+    field_name = "prompt_draft"
+    title = "Draft"
+    key = "draft"   
+
 @admin.register(Story)
-class StoryAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
+class StoryAdmin(SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
     inlines = [AuthorInline]
     autocomplete_fields = ['group']
     search_fields = ['name']
     list_refresh = ['items']
     list_sections = [
-        SceneSection,
-        AuthorSection,
-        SceneCharactersSection,
-        SceneLocationsSection,
-        ScenePropsSection,
-        RenderSection,
         MessageHistorySection,
+        MarkDownSection,
+        ElementSection,
+        AuthorSection,
+        ScenePropsSection,
+        RenderSection
     ]
     list_display = ['__str__', 'items', 'image_intro', 'add_scene', 'last_tasks']
     actions = ['clone', 'add_me_as_author', 'generate_render', 'refresh_render']
@@ -160,7 +113,7 @@ class StoryAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
         }),
         ("Settings", {
             "classes": ["tab"],
-            "fields": [ "style", "theme", "group", "render_type"],
+            "fields": [ "style", "theme", "group", "render_type", "config"],
         })
     )
 
@@ -192,12 +145,11 @@ class StoryAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
 
 
 @admin.register(Scene)
-class SceneAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
+class SceneAdmin(SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
     search_fields = ['name']
     ajax_shift_fields = ['prompt']
     list_refresh = ['items']
-    list_display = ['__str__', 'items', 'prompt', 'prompt_refine', 'last_tasks']
-    list_editable = ['prompt', 'prompt_refine']
+    list_display = ['__str__', 'items', 'last_tasks']
     autocomplete_fields = ['story', 'author', 'instructions']
     actions = ['clone','extract_scene',  'generate_scene_elements', 'generate_scene_actions', 'generate_scene_voices', 'generate_scene_comics', 'generate_render', 'refresh_render']
     list_filter = ['story', 'id']
@@ -205,7 +157,7 @@ class SceneAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
     fieldsets = (
         ("Write",{
             "classes": ["tab"],
-            "fields": [ "prompt", "instructions"],
+            "fields": [ "prompt_plot", "prompt", "prompt_elements", "instructions"],
         }),
         ("Refine",{
             "classes": ["tab"],
@@ -216,7 +168,16 @@ class SceneAdmin(AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, Adm
             "fields": ["name", "author", "story"],
         })
     )
-    list_sections = [MessageHistorySection, MarkDownSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection ]
+    list_sections = [
+        MessageHistorySection,
+        ScriptSection,
+        DraftSection,
+        PlotSection,
+        SceneCharactersSection,
+        SceneLocationsSection,
+        ScenePropsSection,
+        RenderSection
+    ]
 
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "instructions":
@@ -362,7 +323,6 @@ class ComicActionAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMi
     list_display_links = ('name',)
     search_fields = ['name']
     actions = ['generate_comic', 'comic_to_video']
-    fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
 
 
@@ -433,6 +393,10 @@ class ContactRequestAdmin(ModelAdmin):
 
 @admin.register(WorkShop)
 class WorkShopAdmin(ModelAdmin):
+    pass
+
+@admin.register(Preset)
+class PresetAdmin(ModelAdmin):
     pass
 
 @admin.register(Sync)

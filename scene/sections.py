@@ -1,20 +1,14 @@
 import os
 from typing import Any
-from django import forms
 from django.utils.safestring import mark_safe
 from django.http import JsonResponse
 import markdown
 from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html, strip_tags
 from django.urls import reverse, path
-
-from crispy_forms.helper import FormHelper
-from crispy_forms.layout import Layout, Fieldset, Div
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.admin.utils import label_for_field, lookup_field
 from django.shortcuts import get_object_or_404
-from django.db.models import Model
-from django.http import HttpRequest
 from django.template.loader import render_to_string
 
 from unfold.utils import display_for_field, settings
@@ -23,7 +17,7 @@ from unfold.sections import BaseSection, TemplateSection
 from .admin_utils import render_image_markup
 from scene.models import Author, Prop, Background, Character, Scene
 
-from agent.models import Message
+from agent.sections import AjaxSection, MarkDownSection
 
 class TableSection(BaseSection):
     fields = []
@@ -143,21 +137,6 @@ class SceneSection(TableSection):
     show_count = True  # This will run `count()`
     collapsible = True
     related_name = 'scenes'
-
-class AjaxSection(TemplateSection):
-    """Base class for sections that need to handle their own AJAX URLs."""
-
-    @classmethod
-    def get_section_urls(cls, model_admin):
-        """
-        Return a list of URL patterns for the admin.
-        The ModelAdmin will discover and register these.
-        """
-        return []
-
-    @classmethod
-    def get_url_name(cls, action):
-       return f"{cls.__name__.lower()}_{action}"
 
 
 
@@ -321,41 +300,15 @@ class SceneBaseCardsSection(AjaxSection):
         }
 
 
-class MarkDownSection(AjaxSection):
-    template_name = "sections/markdown_section.html"
+class ScriptSection(MarkDownSection):
     field_name = "prompt"
     title = "Script"
     key = "script"
 
-    @classmethod
-    def get_section_urls(cls, model_admin):
-        return [
-            path(f'refresh-section/{cls.key}/<int:content_type_id>/<int:object_id>/',
-                 model_admin.admin_site.admin_view(cls.refresh_view),
-                 name=cls.get_url_name('refresh_section')),
-        ]
-
-    @classmethod
-    def refresh_view(cls, request, content_type_id, object_id):
-        content_type = get_object_or_404(ContentType, pk=content_type_id)
-        model_class = content_type.model_class()
-        instance = get_object_or_404(model_class, pk=object_id)
-        content = getattr(instance, cls.field_name, "") or ""
-        html_content = mark_safe(markdown.markdown(content))
-        html = render_to_string("sections/markdown_section_content.html", {"html_content": html_content})
-        return JsonResponse({"html": html})
-
-    def get_context_data(self, request, instance) -> dict:
-        content_type = ContentType.objects.get_for_model(instance)
-        return {
-            "title": self.title,
-            "instance": instance,
-            "section_key": self.key,
-            "is_loaded": False,
-            "collapsible": True,
-            "content_type_id": content_type.id,
-        }
-
+class ElementSection(MarkDownSection):
+    field_name = "prompt_elements"
+    title = "Element"
+    key = "element"
 
 class SceneCharactersSection(SceneBaseCardsSection):
     key = 'characters'
@@ -378,127 +331,3 @@ class ScenePropsSection(SceneBaseCardsSection):
     model = Prop
     title = _("Props")
     item_method = 'get_props'
-
-
-
-class ChatMessageForm(forms.Form):
-    chat_input = forms.CharField(
-        widget=forms.Textarea(attrs={
-            'rows': 3,  # Increase the default number of rows
-            'placeholder': _('Type your message...'),
-        }),
-        label=""
-    )
-    action = forms.ChoiceField(
-        choices=[],  # Start with empty choices, will be populated in __init__
-        required=False,
-        label="",
-        widget=forms.Select()  # Explicitly use the Select widget
-    )
-
-    def __init__(self, *args, **kwargs):
-        # Pop the instance from kwargs before calling super()
-        instance = kwargs.pop('instance', None)
-        super().__init__(*args, **kwargs)
-
-        # Dynamically set choices based on the instance provided
-        action_choices = getattr(instance, 'ACTION_CHOICES', Scene.ACTION_CHOICES)
-        self.fields['action'].choices = action_choices
-
-        self.helper = FormHelper()
-        self.helper.form_tag = False  # We handle the form tag in the template
-        self.helper.disable_csrf = True
-        self.helper.form_show_labels = False
-        self.helper.layout = Layout(
-            Div(
-                'chat_input',
-                'action',
-                css_class="space-y-4"  # Add vertical space between fields
-            )
-        )
-
-class MessageHistorySection(AjaxSection):
-    verbose_name = _("Chat")
-    template_name = "sections/chat_section.html"
-    collapsible = True
-    key = 'messages'
-    
-
-    @classmethod
-    def get_section_urls(cls, model_admin):
-        # The URL name is now unique per model, preventing conflicts.
-        return [
-            path('chat-message/<int:content_type_id>/<int:object_id>/', 
-                 model_admin.admin_site.admin_view(cls.chat_form_submit), 
-                 name=cls.get_url_name('chat_message')),
-            path('refresh-section/<int:content_type_id>/<int:object_id>/',
-                 model_admin.admin_site.admin_view(cls.refresh_view),
-                 name=cls.get_url_name('refresh_section')),
-        ]
-    
-    @classmethod
-    def chat_form_submit(cls, request, content_type_id, object_id):
-        content_type = get_object_or_404(ContentType, pk=content_type_id)
-        model_class = content_type.model_class()
-        instance = get_object_or_404(model_class, pk=object_id)
-        
-        # Create the task and get its initial status
-        task = instance.task_from_action(
-            action_type=request.POST.get('action'), 
-            message=request.POST.get('chat_input'), 
-            user=request.user
-        )
-        task_status = task.status if task else None
-
-        # Prepare the response for the frontend
-        chat_html = render_to_string(
-            "sections/chat_section_content.html", 
-            cls.get_context(request, instance, content_type_id, object_id), 
-            request=request
-        )
-        
-        return JsonResponse({
-            "status": "task_created",
-            "task_status": task_status,
-            "html": chat_html,
-        })
-
-    @classmethod
-    def refresh_view(cls, request, content_type_id, object_id):
-        content_type = get_object_or_404(ContentType, pk=content_type_id)
-        model_class = content_type.model_class()
-        instance = get_object_or_404(model_class, pk=object_id)
-        
-        context = cls.get_context(request, instance, content_type_id, object_id)
-        html = render_to_string("sections/chat_section_content.html", context, request=request)
-        return JsonResponse({"html": html})
-
-    @classmethod
-    def get_context(cls, request, instance, content_type_id, object_id):
-        # Pass the instance to the form to dynamically set its choices
-        url = f"chat-message/{content_type_id}/{object_id}/"
-        form = ChatMessageForm(instance=instance)
-        context = {
-            "messages": instance.messages.all(),
-            "form": form,
-            "instance": instance,
-            "section_key": cls.key,
-            "content_type_id": content_type_id,
-            "chat_submit_url": url,
-        }
-        return context
-
-    def get_context_data(self, request, instance) -> dict:
-        content_type = ContentType.objects.get_for_model(instance)
-        # The initial context for the section wrapper.
-        # The actual content is loaded via AJAX by refresh_view.
-        context = super().get_context_data(request, instance)
-        context.update({
-            "title": self.verbose_name,
-            "instance": instance,
-            "section_key": self.key,
-            "is_loaded": False, # Important: tells the frontend to fetch content
-            "collapsible": self.collapsible,
-            "content_type_id": content_type.id,
-        })
-        return context

@@ -1,0 +1,45 @@
+{% load unfold i18n %}
+
+<div id="section-{{ section_key }}" class="w-full">
+    <div class="rounded-md border border-gray-200 dark:border-gray-700/50">
+        <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700/50">
+            <div class="flex items-center space-x-3">
+                <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                    {{ title }}
+                </h3>
+            </div>
+        </div>
+        <div class="prose prose-sm dark:prose-invert max-w-none p-4">
+            <h4>Instructions</h4>
+            {% if instructions %}
+                {% for part, formatted_content in instructions %}
+                    {{ formatted_content }}
+                {% endfor %}
+            {% else %}
+                <p>No instructions for this message.</p>
+            {% endif %}
+
+            <hr class="my-4">
+
+            <h4>Inputs</h4>
+            {% if inputs %}
+                {% for part, formatted_content in inputs %}
+                     {{ formatted_content }}
+                {% endfor %}
+            {% else %}
+                <p>No inputs for this message.</p>
+            {% endif %}
+
+            <hr class="my-4">
+
+            <h4>Outputs</h4>
+            {% if outputs %}
+                {% for part, formatted_content in outputs %}
+                    {{ formatted_content }}
+                {% endfor %}
+            {% else %}
+                <p>No outputs for this message.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>

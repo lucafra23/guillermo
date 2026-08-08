@@ -1,5 +1,7 @@
 from celery import shared_task
 from celery.exceptions import SoftTimeLimitExceeded
+from celery.signals import worker_ready
+from billiard.exceptions import Terminated
 from django.conf import settings
 from .models import Task
 import importlib
@@ -13,7 +15,9 @@ def process_task(task_id):
     except Task.DoesNotExist:
         print(f"Skipping missing task {task_id}")
         return
-
+    if task.status == Task.TASK_STATUS_STARTED:
+        print(f"Attempt to process a started task {task.id}")
+        return
     print(f"Processing task {task.id} ")
     if task.has_pending_previous():
         task.set_status(Task.TASK_STATUS_HOLDING)
@@ -40,6 +44,12 @@ def process_task(task_id):
                 f"{traceback.format_exc()}"
             )
             task.set_status(Task.TASK_STATUS_ERROR)
+        except Terminated as e:
+            task.log(
+                "Task was terminated abruptly (Celery worker is shutting down or the task was explicitly revoked).\n"
+                f"{traceback.format_exc()}"
+            )
+            task.set_status(Task.TASK_STATUS_ERROR)
         except Exception as e:
             task.log(
                 f"Task failed with {e.__class__.__name__}: {e}\n"
@@ -53,6 +63,19 @@ def process_task(task_id):
                 task.set_status(Task.TASK_STATUS_RETRY)
                 task.process(countdown=task.retry_countdown)
             return # Stop further processing for this run
+
+
+@worker_ready.connect
+def cleanup_stuck_tasks(sender, **kwargs):
+    """
+    Fires automatically when a Celery worker starts up.
+    Finds tasks stuck in the 'Started' state from a previous crashed run and marks them as Error.
+    """
+    stuck_tasks = Task.objects.filter(status=Task.TASK_STATUS_STARTED)
+    count = stuck_tasks.count()
+    for task in stuck_tasks:
+        task.log("Task marked as Error because the Celery worker process died or restarted during execution.")
+        task.set_status(Task.TASK_STATUS_ERROR)
             
 
         

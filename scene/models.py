@@ -15,6 +15,8 @@ from .schemas import ActionSchema
 from django.utils.translation import gettext_lazy as _
 from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
+from simple_history.models import HistoricalRecords
+
 from PIL import Image
 
 def dashboard_callback(request, context):
@@ -55,7 +57,7 @@ class Style(models.Model, GetContentsMixin, ModelDisplayMixin):
 
 class Preset(models.Model):
     name = models.CharField(_("name"), null=True, blank=True)
-    preset = models.JsonField(_("preset"), null=True, blank=True)
+    preset = models.JSONField(_("preset"), null=True, blank=True)
     
 
 class Author(models.Model, UserCreatorMixin):
@@ -91,8 +93,44 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
 
     prompt = models.TextField(_("prompt"), null=True, blank=True, default="#Plot\n")
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
+    prompt_elements = models.TextField(_("Prompt Elements"), null=True, blank=True, default="#Locations\n#Characters\n#Props\n#Voices\n")
+
     action = models.SlugField(_("action"), choices=settings.TASK_TYPE_CHOICES, null=True, blank=True)
     mentor = models.ForeignKey("agent.Agent", verbose_name=_("mentor"), related_name='mentors_stories', on_delete=models.CASCADE, null=True, blank=True)
+    history = HistoricalRecords()
+    
+
+    TASK_TEXT_GENERATE = settings.TASK_TYPE_GENERATE_TEXT
+    
+    PRESET_CREATE_SCENES = "create_scenes"
+    PRESET_EDIT_SCENES = "edit_scenes"
+    PRESET_CREATE_ELEMENTS = "create_elements"
+    PRESET_EDIT_ELEMENTS = "edit_elements"
+    PRESET_SYNC_SCENES =  "sync_scenes"
+    
+    ACTION_CREATE_SCENES = f"{TASK_TEXT_GENERATE}-preset-{PRESET_CREATE_SCENES}"
+    ACTION_EDIT_SCENES = f"{TASK_TEXT_GENERATE}-preset-{PRESET_EDIT_SCENES}"
+
+    ACTION_CREATE_ELEMENTS = f"{TASK_TEXT_GENERATE}-preset-{PRESET_CREATE_ELEMENTS}-target-prompt_elements-schema-{settings.SCHEMA_OUTPUT_WITH_MESSAGE}"
+    ACTION_EDIT_ELEMENTS = f"{TASK_TEXT_GENERATE}-preset-{PRESET_EDIT_ELEMENTS}-schema-{settings.SCHEMA_OUTPUT_WITH_MESSAGE}"
+
+    ACTION_SYNC_SCENES = f"{TASK_TEXT_GENERATE}-preset-{PRESET_SYNC_SCENES}-schema-{settings.SCHEMA_STORY_SCENES}"
+
+    ACTION_CHOICES = (
+        (ACTION_CREATE_SCENES, _("Create story scenes")),
+        (ACTION_EDIT_SCENES, _("Edit story scenes")),
+        (ACTION_CREATE_ELEMENTS, _("Create story elements")),
+        (ACTION_EDIT_ELEMENTS, _("Edit story elements")),
+        (ACTION_SYNC_SCENES, _("Sync story scenes")),
+    )
+
+    AGENT_PRESETS = (
+        (PRESET_CREATE_SCENES, _("Create story scenes")),
+        (PRESET_EDIT_SCENES, _("Edit story scenes")),
+        (PRESET_CREATE_ELEMENTS, _("Create  story elements")),
+        (PRESET_EDIT_ELEMENTS, _("Edit story elements")),
+        (PRESET_SYNC_SCENES, _("Sync story scenes")),  
+    )
 
     RENDER_TYPE_FILM = 'film'
     RENDER_TYPE_GRAPHIC_NOVEL = 'comic'
@@ -111,7 +149,7 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
         default=getattr(settings, 'DEFAULT_RENDER_TYPE', RENDER_TYPE_ANIMATIC),
         help_text=_("The default render format for this story.")
     )
-    config = models.ForeignKey(Preset, verbose_name=_("config"), related_name='stories', on_delete=models.SET_NULL, null=True, blank=True
+    config = models.ForeignKey(Preset, verbose_name=_("config"), related_name='stories', on_delete=models.SET_NULL, null=True, blank=True)
     
     def __str__(self):
         return "{}".format(self.name)
@@ -138,6 +176,12 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
             for action in scene.actions.all().order_by('order'):
                 slides.append(action.slide())
         return slides
+    
+    def get_conf(self, key):
+        out = None
+        if self.config and self.config and key in self.config.preset:
+            out =  self.config.preset[key]
+        return out
 
     def get_props(self):
         return Prop.objects.filter(story=self).order_by('name')
@@ -241,19 +285,19 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
                 google_voice=v.google_voice.name if v.google_voice else None
             ) for v in self.voices.all()
         ]
+        """
         google_voices = [
-            GoogleVoiceSchema(
+            GoogleVoiceSchema(#
                 name=gv.name,
                 description=gv.description or ""
             ) for gv in GoogleVoice.objects.all()
         ]
-
+        """
         elements_data = StoryElementsSchema(
             locations=locations,
             characters=characters,
             props=props,
             voices=voices,
-            google_voices=google_voices
         ).model_dump()
 
         # Filter out empty lists before dumping to YAML
@@ -263,64 +307,103 @@ class Story(AfterSaveActionMixin, RenderTypeMixin, models.Model, GetContentsMixi
             return None
         return yaml.dump({"story_context": filtered_data}, indent=2, default_flow_style=False)
 
+    def get_contents(self, generate_self=True, preset=None):
+        parts = []
+        if not generate_self:
+            if self.style:
+                parts.extend(self.style.get_contents(generate_self=False))
+        elif preset in [self.PRESET_SYNC_SCENES, self.PRESET_EDIT_SCENES]:
+                parts.append(self.prompt)
+        elif preset in [self.PRESET_CREATE_ELEMENTS]:
+            parts.append(self.prompt)
+            if self.style:
+                parts.append(self.style.get_contents(generate_self=False))   
+        elif preset in [self.PRESET_EDIT_ELEMENTS]:
+            parts.append(self.prompt_elements)
+            parts.append(self.prompt)
+            if self.style:
+                parts.append(self.style.get_contents(generate_self=False)) 
+        else:
+            parts = super().get_contents(generate_self=generate_self, preset=preset)
+        
+        return parts
+    
 class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, ModelDisplayMixin):
     
     TASK_TEXT_GENERATE = settings.TASK_TYPE_GENERATE_TEXT
     TASK_EXTRACT_SCENE = settings.TASK_TYPE_EXTRACT_SCENE
+    # draft 
+    PRESET_CREATE_DRAFT = "scene_create_draft"
+    PRESET_EDIT_DRAFT = "scene_edit_draft"
+    # shot prompt (shots)
+    PRESET_CREATE_PROMPT = "scene_create_prompt"
+    PRESET_EDIT_PROMPT = "scene_edit_prompt"
 
-    PRESET_FROM_SHOTS = "from_shots"
-    PRESET_FROM_PROMPT = "from_prompt"
+    # sync structure
+    PRESET_ELEMENTS = "scene_sync_elements"
+
+    # edit a structured scene      
+    PRESET_FROM_SHOTS = "scene_from_shots"
     PRESET_TRANSLATE =  "translate"
+
+    AGENT_PRESETS = (
+        (PRESET_CREATE_DRAFT, _("Create draft from plot")),
+        (PRESET_EDIT_DRAFT, _("Edit draft")),
+        (PRESET_CREATE_PROMPT, _("Create prompt from draft")),
+        (PRESET_EDIT_PROMPT, _("Refine from prompt")),
+        (PRESET_FROM_SHOTS, _("Refine from shots")),
+        (PRESET_TRANSLATE, _("Translate from prompt")),
+        (PRESET_ELEMENTS, _("Sync ELements"))
+    ) + settings.COMMON_TEXT_AGENT_PRESETS
+
+    # draft 
+    ACTION_CREATE_DRAFT = f"{TASK_TEXT_GENERATE}-preset-{PRESET_CREATE_DRAFT}-target-prompt_draft"
+    ACTION_EDIT_DRAFT = f"{TASK_TEXT_GENERATE}-preset-{PRESET_EDIT_DRAFT}-target-prompt_draft"
+    # shot prompt (shots)
+    ACTION_CREATE_PROMPT = f"{TASK_TEXT_GENERATE}-preset-{PRESET_CREATE_PROMPT}"
+    ACTION_EDIT_PROMPT = f"{TASK_TEXT_GENERATE}-preset-{PRESET_EDIT_PROMPT}"
+
+    ACTION_EDIT_FROM_SHOTS = f"{TASK_TEXT_GENERATE}-preset-{PRESET_FROM_SHOTS}"
     
-    ACTION_REFINE_FROM_SHOTS = f"{TASK_TEXT_GENERATE}_preset_{PRESET_FROM_SHOTS}"
-    ACTION_REFINE_FROM_PROMPT = f"{TASK_TEXT_GENERATE}_preset_{PRESET_FROM_PROMPT}"
-    ACTION_TRANSLATE_FROM_PROMPT = f"{TASK_TEXT_GENERATE}_preset_{PRESET_TRANSLATE}"
+    ACTION_TRANSLATE_FROM_PROMPT = f"{TASK_TEXT_GENERATE}-preset-{PRESET_TRANSLATE}"
+    ACTION_SYNC_ELEMENTS = f"{TASK_TEXT_GENERATE}-preset-{PRESET_ELEMENTS}"
+
     ACTION_GENERATE_STRUCTURE = settings.TASK_TYPE_EXTRACT_SCENE
 
+
     ACTION_CHOICES = (
-        (ACTION_REFINE_FROM_SHOTS, _("Refine from shots")),
-        (ACTION_REFINE_FROM_PROMPT, _("Refine from prompt")),
+        (ACTION_CREATE_DRAFT, _("Draft from plot")),
+        (ACTION_EDIT_DRAFT, _("Edit draft")),
+        (ACTION_CREATE_PROMPT, _("Create prompt from draft")),  
+        (ACTION_EDIT_PROMPT, _("Edit from prompt")), 
+        (ACTION_EDIT_FROM_SHOTS, _("Refine from shots")),
         (ACTION_TRANSLATE_FROM_PROMPT, _("Translate from prompt")),
-        (ACTION_GENERATE_STRUCTURE, _("Sync structure"))
-    )
+        (ACTION_SYNC_ELEMENTS, _("Sync structure")),
+        (ACTION_GENERATE_STRUCTURE, _("Generate structure"))
+    ) + settings.COMMON_TEXT_ACTION_CHOICES
+
 
     name = models.CharField(_("name"), max_length=200, null=True, blank=True)
-    prompt = models.TextField(_("prompt"), null=True, blank=True, default="#Shots\n")
     prompt_refine = models.TextField(_("prompt refine"), null=True, blank=True)
-    action = models.SlugField(_("action"), choices=ACTION_CHOICES, null=True, blank=True)
+    prompt_plot = models.TextField(_("Prompt Plot"), null=True, blank=True)
+    prompt_draft = models.TextField(_("Prompt Draft from Plot"), null=True, blank=True)
+    prompt = models.TextField(_("Prompt Shots from Draft"), null=True, blank=True, default="#Shots\n")    
+    prompt_elements = models.TextField(_("Prompt Elements"), null=True, blank=True)
+
+    action = models.SlugField(_("action"), max_length=1024, choices=ACTION_CHOICES, null=True, blank=True)
 
     order = models.PositiveIntegerField(_("order"), default=0, db_index=True)
     story = models.ForeignKey('Story', verbose_name=_("story"), related_name='scenes', null=True, blank=True, on_delete=models.CASCADE)
     author = models.ForeignKey('Author', verbose_name=_("author"), related_name='scenes', on_delete=models.CASCADE, null=True, blank=True)
     instructions = models.ManyToManyField('agent.Prompt', verbose_name=_("instructions"), null=True, blank=True)
 
+    history = HistoricalRecords()
+
     def __str__(self):
         return "{}".format(self.name if self.name else f"Scene{self.id} of {self.story}")
     
     def get_instructions(self, preset):
         return self.instructions.filter(category=preset)
-
-    def task_from_action(self, action_type, user, message=None):
-        """
-        Parses an action_type string to extract the task_type and an optional preset.
-        The expected format is 'task_type_preset_preset_name' or just 'task_type'.
-        """
-        parts = action_type.split('_preset_', 1)
-        task_type = parts[0]
-        preset = parts[1] if len(parts) > 1 else None
-        payload = {}
-        if preset:
-            payload['preset'] = preset
-        if message:
-            payload['message'] = message
-
-        task = Task.createTaskIfQueueEnabled(
-                subject=self,
-                task_type=task_type,
-                payload=payload if payload else None,
-                owner=user
-            )
-        return task
 
     def shots(self):
         return self.actions.all()
@@ -357,20 +440,37 @@ class Scene(AfterSaveActionMixin, models.Model, TaskHolder, GetContentsMixin, Mo
         if not generate_self:
             parts.extend(self.story.style.get_contents(generate_self=False))
         else:
+            # deprecated
             if preset == self.PRESET_REFINE_PROMPT:
                 parts.append(self.prompt_refine)
                 if self.shots().exists():
                     parts.append(self.get_shots_as_yaml())
                 else:
                     parts.append(self.prompt)
+            elif preset == self.PRESET_CREATE_DRAFT:
+                parts.append(self.prompt_plot)
+            elif preset in [self.PRESET_EDIT_DRAFT, self.PRESET_CREATE_PROMPT]:
+                parts.append(self.prompt_draft)  
             elif preset == self.PRESET_FROM_SHOTS:
                 if self.shots().exists():
                     parts.append(self.get_shots_as_yaml())
-            elif preset == self.PRESET_FROM_PROMPT:
-                parts.append(self.prompt)
-            if self.story:
-                elements_yaml = self.story.get_elements_as_yaml()
-                if elements_yaml: parts.append(elements_yaml)
+            elif preset in [self.PRESET_SYNC_SCENE, self.PRESET_EDIT_PROMPT]:
+                if self.prompt:
+                    parts.append(self.prompt)
+                elif self.prompt_plot:
+                    parts.append(self.prompt_plot)
+        if self.story and preset in [
+                self.PRESET_REFINE_PROMPT,
+                self.PRESET_FROM_SHOTS,
+                self.PRESET_CREATE_PROMPT, 
+                self.PRESET_EDIT_PROMPT, 
+                self.PRESET_SYNC_SCENE
+            ]:
+            elements_yaml = self.story.get_elements_as_yaml()
+            if elements_yaml: parts.append(elements_yaml)
+
+        if len(parts) == 0:
+            parts = super().get_contents(generate_self=generate_self, preset=preset)
         return parts
 
     def get_cast(self):
@@ -744,7 +844,7 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
         }
 
     class Meta:
-        ordering = ['order', 'name']
+        ordering = ['order']
         verbose_name = _('Shot')
         verbose_name_plural = _('Shots')
 
@@ -900,6 +1000,11 @@ class Render(RenderTypeMixin, models.Model, TaskHolder, ModelDisplayMixin):
 
         item.save()
         return item
+    def get_conf(self, key):
+        story = self.story
+        if self.scene:
+            story = self.scene.story
+        return story.get_conf(key)
 
     def refresh_render(self):
         """

@@ -572,7 +572,7 @@ document.addEventListener('click', function(e) {
         const input = formContainer.querySelector('textarea[name="chat_input"]');
         const actionSelect = formContainer.querySelector('select[name="action"]');
         const messagesContainer = document.getElementById(`chat-messages-${objectId}`);
-        const url = getAdminBaseUrl() + "/" + formContainer.dataset.url;
+        const url = `${getAdminBaseUrl()}/${formContainer.dataset.url}`;
         const token = formContainer.querySelector('[name=csrfmiddlewaretoken]').value;
         console.log(`[AdminAjax] Preparing to send chat input for object ID: ${objectId} | URL: ${url} | Input: ${input.value} | Token: ${token}`);
         
@@ -594,8 +594,8 @@ document.addEventListener('click', function(e) {
                     <p class="text-sm">${originalInputValue}</p>
                 </div>
             </div>`;
-        messagesContainer.insertAdjacentHTML('beforeend', tempUserMessage);
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        messagesContainer.insertAdjacentHTML('afterbegin', tempUserMessage);
+        messagesContainer.scrollTop = 0;
 
         fetch(url, {
             method: 'POST',
@@ -608,7 +608,7 @@ document.addEventListener('click', function(e) {
         .then(data => {
             // Update the chat content with the server-rendered HTML
             messagesContainer.innerHTML = data.html;
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            messagesContainer.scrollTop = 0;
             input.value = ''; // Clear input on success
 
             // If a task was created, start polling for the main object

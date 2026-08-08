@@ -1,11 +1,25 @@
 from datetime import timedelta
 from django.utils import timezone
-
 from task.models import Task
 from agent.models import GetContentsMixin
 from django.utils.text import slugify
 from django.conf import settings
 from django.core.files.base import ContentFile
+
+
+def get_next_scheduled_timestamp():
+    """
+    Finds the latest scheduled task time and returns a new timestamp
+    just after it, or the current time if no future tasks are scheduled.
+    """
+    latest_scheduled_task = Task.objects.filter(
+        status=Task.TASK_STATUS_SCHEDULED,
+        scheduled_at__isnull=False
+    ).order_by('-scheduled_at').first()
+
+    if latest_scheduled_task and latest_scheduled_task.scheduled_at > timezone.now():
+        return latest_scheduled_task.scheduled_at
+    return timezone.now()
 
 
 class TaskGenerateImage:
@@ -78,25 +92,6 @@ class TaskExtractScene:
         log = item.generate_scene(user=self.task.owner)
         self.task.log(log)
 
-class TaskGenerateText:
-    def __init__(self, task):
-        self.task = task
-
-    def process(self):
-        item = self.task.subject
-        agent = self.task.thr
-        payload = self.task.payload or {}
-        preset = payload.get('preset', GetContentsMixin.PRESET_REFINE_PROMPT)
-        message = payload.get('message', None)
-        target_field = payload.get('target_field', "prompt")
-        item.generate_text(
-            agent=agent, 
-            preset=preset, 
-            message=message, 
-            user=self.task.owner, 
-            target_field=target_field
-        )
-        
 
 class TaskGenerateScene:
     """
@@ -121,29 +116,33 @@ class TaskGenerateElements:
 
     def process(self):
         scene = self.task.subject
-        elements = set()
-        voices = set()
+        elements_to_generate = set()
 
         for action in scene.actions.all():
-            if action.background: elements.add(action.background)
-            if action.actor: 
-                elements.add(action.actor)
-                if action.actor.voice: voices.add(action.actor.voice)
-            for char in action.cast.all(): 
-                elements.add(char)
-                if char.voice: voices.add(char.voice)
-            for prop in action.props.all(): elements.add(prop)
-            if action.voice: voices.add(action.voice)
+            if action.background and not action.background.image:
+                elements_to_generate.add(action.background)
+            if action.actor and not action.actor.image:
+                elements_to_generate.add(action.actor)
+            for char in action.cast.all():
+                if not char.image:
+                    elements_to_generate.add(char)
+            for prop in action.props.all():
+                if not prop.image:
+                    elements_to_generate.add(prop)
 
-        for element in elements:
-            if not element.image:
-                self.task.log(f"Queueing image generation for {element.name} ({element.__class__.__name__})")
-                Task.createTaskIfQueueEnabled(
-                    subject=element,
-                    task_type=settings.TASK_TYPE_GENERATE_IMAGE,
-                    thr=scene,
-                    owner=self.task.owner
-                )
+        timestamp = get_next_scheduled_timestamp()
+        for i, element in enumerate(elements_to_generate):
+            self.task.log(f"Queueing image generation for {element.name} ({element.__class__.__name__})")
+            task_timestamp = timestamp + timedelta(minutes=i + 1)
+            task = Task.createTaskIfQueueEnabled(
+                subject=element,
+                task_type=settings.TASK_TYPE_GENERATE_IMAGE,
+                thr=scene,
+                owner=self.task.owner,
+                process=False
+            )
+            if task:
+                task.process(timestamp=task_timestamp)
 
 
 class TaskGenerateShots:
@@ -158,17 +157,7 @@ class TaskGenerateShots:
     def process(self):
         scene = self.task.subject
         element_tasks_buffer = {}  # key: (model_name, id)
-        
-        # Find the latest scheduled task to queue new tasks after it.
-        latest_scheduled_task = Task.objects.filter(
-            status=Task.TASK_STATUS_SCHEDULED,
-            scheduled_at__isnull=False
-        ).order_by('-scheduled_at').first()
-
-        if latest_scheduled_task and latest_scheduled_task.scheduled_at > timezone.now():
-            timestamp = latest_scheduled_task.scheduled_at
-        else:
-            timestamp = timezone.now()
+        timestamp = get_next_scheduled_timestamp()
 
         action_tasks = []
         for action in scene.actions.all().order_by('order'):
@@ -209,8 +198,9 @@ class TaskGenerateShots:
                 )
                 if action_task:
                     self.task.log(f"Queuing image generation for action: {action.get_name()}")
-                    for dep_task in action_dependencies:
-                        dep_task.next_tasks.add(action_task)
+                    # we are queue the tasks anyway
+                    #for dep_task in action_dependencies:
+                    #    dep_task.next_tasks.add(action_task)
                     action_tasks.append(action_task)
 
         minute_offset = 1
@@ -244,18 +234,29 @@ class TaskGenerateVoices:
                     owner=self.task.owner
                 )
 
-class TaskGenerateComic:
+class TaskGenerateComics:
     def __init__(self, task):
         self.task = task
 
     def process(self):
         scene = self.task.subject
-        for action in scene.actions.all():
-           if action.prompt_comic and not action.image_comic:
-                self.task.log(f"Queueing comic generation for {action.name}")
-                Task.createTaskIfQueueEnabled(
+        timestamp = get_next_scheduled_timestamp()
+        comic_tasks = []
+
+        for action in scene.actions.all().order_by('order'):
+            if action.prompt_comic and not action.image_comic:
+                task = Task.createTaskIfQueueEnabled(
                     subject=action,
                     task_type=settings.TASK_TYPE_GENERATE_COMIC,
                     thr=scene,
-                    owner=self.task.owner
+                    owner=self.task.owner,
+                    process=False
                 )
+                if task:
+                    self.task.log(f"Queuing comic generation for action: {action.get_name()}")
+                    comic_tasks.append(task)
+
+        minute_offset = 1
+        for i, c_task in enumerate(comic_tasks):
+            task_timestamp = timestamp + timedelta(minutes=(i * minute_offset))
+            c_task.process(timestamp=task_timestamp)

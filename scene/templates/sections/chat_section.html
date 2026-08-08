@@ -1,14 +1,15 @@
-{% load i18n %}
+{% load i18n unfold crispy_forms_tags %}
 <div
     id="section-{{ section_key }}"
-    class="relative w-full bg-white rounded-lg shadow-sm dark:bg-gray-900 border border-gray-200 dark:border-gray-800"
+    class="relative w-full bg-white rounded-lg shadow-sm dark:bg-gray-900 border border-gray-200 dark:border-gray-800 flex flex-col"
     x-data="{
         isLoaded: false,
         isLoading: false,
         isCollapsed: {{ collapsible|yesno:'true,false' }},
         loadSection() {
-            if (this.isLoaded || this.isLoading) return;
+            if ((this.isLoaded && !this.forceReload) || this.isLoading) return;
             this.isLoading = true;
+            this.$refs.content.innerHTML = `<div class='flex flex-col items-center justify-center p-12 text-center w-full gap-2 h-full min-h-[200px] justify-center'><span class='material-symbols-outlined animate-spin text-4xl text-primary-600 dark:text-primary-400'>progress_activity</span><span class='text-sm text-gray-500 dark:text-gray-400 font-medium animate-pulse'>{% trans "Loading chat history..." %}</span></div>`;
             const url = `{{ request.path }}refresh-section/{{ content_type_id }}/{{ instance.pk }}/`;
             fetch(url)
                 .then(response => response.json())
@@ -16,23 +17,26 @@
                     this.$refs.content.innerHTML = data.html;
                     this.isLoaded = true;
                 })
-                .catch(error => console.error('Error loading section:', error))
+                .catch(error => {
+                    console.error('Error loading section:', error);
+                    this.$refs.content.innerHTML = `<div class='p-4 text-red-500'>Error loading messages.</div>`;
+                })
                 .finally(() => this.isLoading = false);
         }
     }"
     x-init="if (!isCollapsed) { loadSection(); }" data-content-type-id="{{ content_type_id }}"
 >
-    <div class="flex items-center justify-between w-full px-4 py-3">
+    <div class="flex items-center justify-between w-full px-4 py-3 border-b border-gray-200 dark:border-gray-800">
         <div class="flex items-center gap-3">
             <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ title }}</h3>
-            <a href="{% url 'admin:agent_message_changelist' %}?content_type__id__exact={{ content_type_id }}&object_id__exact={{ instance.pk }}"
+            <a href="{% url 'admin:agent_message_changelist' %}?content_type={{ content_type_id }}&object_id={{ instance.pk }}"
                class="text-primary-600 hover:text-primary-500 dark:text-primary-400 dark:hover:text-primary-300"
-               title="{% trans 'View all messages' %}">
-                <span class="material-symbols-outlined text-lg">open_in_new</span>
+               title="{% trans 'View all messages in admin' %}" target="_blank">
+                <span class="material-symbols-outlined text-lg">forum</span>
             </a>
         </div>
         <div class="flex items-center gap-x-2">
-            <button type="button" @click.stop="isLoaded = false; loadSection()"
+            <button type="button" @click.stop="forceReload = true; loadSection(); forceReload = false;"
                     class="cursor-pointer inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-600 hover:text-primary-500 dark:text-primary-400 transition-colors group">
                 <span class="material-symbols-outlined text-[16px] group-hover:rotate-180 transition-transform duration-500">refresh</span>
             </button>
@@ -44,11 +48,28 @@
         </div>
     </div>
 
-    <div x-show="!isCollapsed" class="border-t border-gray-200 dark:border-gray-800" style="display: none; height: 70vh;">
-        <div x-ref="content" class="flex flex-col h-full">
-            <div x-show="isLoading" class="flex items-center justify-center p-6">
-                <span class="material-symbols-outlined text-4xl animate-spin text-primary-500">progress_activity</span>
-            </div>
+    <!-- Always Visible Form Header -->
+    <div class="p-4 border-b border-gray-200 dark:border-gray-800 bg-gray-100 dark:bg-gray-950">
+     <div id="chat-form-{{ instance.id }}" class="chat-form" data-object-id="{{ instance.id }}" data-url="{{ chat_submit_url }}">
+    
+        <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-center [&_.mb-3]:mb-0 [&_.form-group]:mb-0 [&_label]:hidden">
+        {% csrf_token %}
+        <div class="md:col-span-7">
+            {{ form.chat_input|as_crispy_field }}
         </div>
+        <div class="md:col-span-3">
+            {{ form.action|as_crispy_field }}
+        </div>
+        <button type="button" class="chat-submit-btn md:col-span-2 w-full py-2 px-4 rounded-md bg-primary-600 text-white hover:bg-primary-500 transition-colors disabled:bg-gray-400 disabled:opacity-70 flex items-center justify-center">
+            <span class="material-symbols-outlined text-xl">send</span>
+        </button>
     </div>
+     </div>
+    </div>
+
+    <!-- Collapsible Chat Messages Container -->
+    <div x-show="!isCollapsed" class="flex-grow" style="display: none; height: 70vh;">
+        <div x-ref="content" id="chat-messages-{{ instance.id }}" class="flex flex-col h-full bg-gray-50 dark:bg-gray-900/50 overflow-y-auto">
+        </div>
+</div>
 </div>

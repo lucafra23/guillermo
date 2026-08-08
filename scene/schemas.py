@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
+from agent.models import Prompt
+
 
 class Parameters(BaseModel):
     buffer_in: Optional[float] = None
@@ -49,7 +51,7 @@ class StoryElementsSchema(BaseModel):
     characters: List[CharacterSchema]
     props: List[PropSchema]
     voices: List[VoiceSchema]
-    google_voices: List[GoogleVoiceSchema]
+
 
 class SceneSchema(BaseModel):
     name: str
@@ -164,4 +166,55 @@ class MultiSceneSchema(BaseModel):
         for scene_data in self.scenes:
             last_scene = scene_data.sync_model(source)
         return last_scene
+
+
+class OutputWithMessageSchema(BaseModel):
+    message: str
+    output: str
+
+    def sync_model(self, source):
+        return dict(self)
+
+    def get_output(self):
+        return self.output
+
+
+class CreateInstructionsSchema(OutputWithMessageSchema):
+    def sync_model(self, source):
+        Prompt.objects.update_or_create(
+            name=f"Prompt Automatically Created",
+            defaults={
+                'prompt': self.output,
+            }
+        )
+        return dict(self)
     
+
+class StorySceneItemSchema(BaseModel):
+    name: str
+    prompt_plot: str
+    order: int
+
+
+class StoryScenesSchema(BaseModel):
+    scenes: List[StorySceneItemSchema]
+
+    def sync_model(self, story):
+        from .models import Scene
+        synced_scenes = []
+        for scene_data in self.scenes:
+            scene, created = Scene.objects.update_or_create(
+                story=story,
+                name=scene_data.name,
+                defaults={
+                    'prompt_plot': scene_data.prompt_plot,
+                    'order': scene_data.order,
+                }
+            )
+            synced_scenes.append(scene)
+        return {
+            'scenes': [
+                {'name': s.name, 'prompt_plot': s.prompt_plot, 'order': s.order}
+                for s in synced_scenes
+            ]
+        }
