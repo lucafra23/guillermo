@@ -8,11 +8,23 @@ from django.utils.translation import gettext_lazy as _
 from django.contrib.contenttypes.models import ContentType
 from .utils import handle_ajax_field_save
 from django.apps import apps
+from django.forms import modelform_factory
 from unfold.widgets import SELECT_CLASSES, Select, UnfoldAdminSelectWidget, UnfoldAdminTextareaWidget
 from unfold.sections import TemplateSection
 from django.utils.safestring import mark_safe
+from .widgets import DynamicMarkdownWidget as MarkdownWidget
+from django.db import models as db_models
 
 class AjaxSectionAdminMixin:
+    @property
+    def media(self):
+        media = super().media
+        try:
+            media = media + MarkdownWidget().media
+        except Exception:
+            pass
+        return media
+
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
@@ -341,3 +353,138 @@ class MessageOutputsSection(MessageInputsSection):
             if part.file:
                 parts_text.append(f"[Download File]({part.file.url})")
         return "\n\n".join(parts_text) if parts_text else _("No outputs found.")
+
+
+class GenericFormSection(AjaxSection):
+    """A generic section that renders a model form for the instance,
+    handles AJAX validation/submission, and updates the UI.
+    """
+    template_name = "sections/generic_form_section.html"
+    fields = "__all__"  # Can be a list of fields or "__all__"
+    form_class = None   # Optional custom form class
+    title = _("Edit Details")
+    key = "generic_form"
+    collapsible = True
+
+    def get_form_class(self, model):
+        if self.form_class:
+            FormClass = self.form_class
+        else:
+            widgets = {}
+            for field in model._meta.get_fields():
+                if self.fields == "__all__" or field.name in self.fields:
+                    if isinstance(field, db_models.TextField):
+                        widgets[field.name] = MarkdownWidget()
+            FormClass = modelform_factory(model, fields=self.fields, widgets=widgets)
+
+        # Ensure any textarea widget on the form class is defaulted to MarkdownWidget
+        for field in FormClass.base_fields.values():
+            if isinstance(field.widget, forms.Textarea) and not isinstance(field.widget, MarkdownWidget):
+                field.widget = MarkdownWidget(attrs=field.widget.attrs)
+        return FormClass
+
+    @classmethod
+    def get_section_urls(cls, model_admin):
+        return [
+            path(f'form-submit/{cls.key}/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.form_submit),
+                 name=cls.get_url_name('form_submit')),
+            path(f'refresh-section/{cls.key}/<int:content_type_id>/<int:object_id>/',
+                 model_admin.admin_site.admin_view(cls.refresh_view),
+                 name=cls.get_url_name('refresh_section')),
+        ]
+
+    @classmethod
+    def form_submit(cls, request, content_type_id, object_id):
+        if request.method != "POST":
+            return JsonResponse({"error": "Method not allowed"}, status=405)
+
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+
+        section = cls(request=request, instance=instance)
+        FormClass = section.get_form_class(model_class)
+        form = FormClass(request.POST, request.FILES, instance=instance)
+
+        if form.is_valid():
+            form.save()
+            instance.refresh_from_db()
+            context = section.get_context_data(request, instance)
+            context["is_loaded"] = True
+            html = render_to_string(
+                "sections/generic_form_section_content.html",
+                context,
+                request=request
+            )
+            return JsonResponse({
+                "status": "success",
+                "html": html,
+            })
+        else:
+            context = section.get_context_data(request, instance)
+            context["is_loaded"] = True
+            html = render_to_string(
+                "sections/generic_form_section_content.html",
+                {
+                    **context,
+                    "form": form,
+                },
+                request=request
+            )
+            return JsonResponse({
+                "status": "error",
+                "html": html,
+            }, status=400)
+
+    @classmethod
+    def refresh_view(cls, request, content_type_id, object_id):
+        content_type = get_object_or_404(ContentType, pk=content_type_id)
+        model_class = content_type.model_class()
+        instance = get_object_or_404(model_class, pk=object_id)
+
+        section = cls(request=request, instance=instance)
+        context = section.get_context_data(request, instance)
+        context["is_loaded"] = True
+        html = render_to_string(
+            "sections/generic_form_section_content.html",
+            context,
+            request=request
+        )
+        return JsonResponse({"html": html})
+
+    def get_context_data(self, request, instance) -> dict:
+        content_type = ContentType.objects.get_for_model(instance)
+        FormClass = self.get_form_class(instance.__class__)
+        form = FormClass(instance=instance)
+        submit_url = f"form-submit/{self.key}/{content_type.id}/{instance.pk}/"
+
+        for field in form.fields.values():
+            if isinstance(field.widget, MarkdownWidget):
+                continue
+            elif isinstance(field.widget, forms.Textarea):
+                field.widget.attrs.update({"class": "unfold-input border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 rounded px-3 py-2 w-full text-sm"})
+            elif isinstance(field.widget, (forms.TextInput, forms.EmailInput, forms.NumberInput)):
+                field.widget.attrs.update({"class": "unfold-input border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 rounded h-10 px-3 w-full text-sm"})
+            elif isinstance(field.widget, forms.Select):
+                field.widget.attrs.update({"class": "unfold-select border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 rounded h-10 px-3 w-full text-sm"})
+
+        context = super().get_context_data(request, instance)
+        context.update({
+            "request": request,
+            "form": form,
+            "title": self.title,
+            "instance": instance,
+            "section_key": self.key,
+            "is_loaded": False,
+            "collapsible": self.collapsible,
+            "content_type_id": content_type.id,
+            "submit_url": submit_url,
+        })
+        return context
+
+
+class PromptFormSection(GenericFormSection):
+    title = _("Prompt")
+    key = "prompt"
+    fields = ["prompt"]  # Only include the 'prompt' field

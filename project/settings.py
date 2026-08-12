@@ -507,7 +507,7 @@ SCHEMA_MULTI_SCENE = "multiscene"
 SCHEMA_SCENE = "scene"
 SCHEMA_OUTPUT_WITH_MESSAGE = "outwithmsg"
 SCHEMA_CREATE_INSTRUCTIONS = "create_instructions"
-
+SCHEMA_ASSETS = "assets"
 SCHEMA_STORY_SCENES = "story_scenes"
 
 AGENT_SCHEMA_CHOICES = [
@@ -516,6 +516,7 @@ AGENT_SCHEMA_CHOICES = [
     (SCHEMA_OUTPUT_WITH_MESSAGE, _("Output With Message")),
     (SCHEMA_CREATE_INSTRUCTIONS, _("Create Instructions")),
     (SCHEMA_STORY_SCENES, _("Story Scenes")),
+    (SCHEMA_ASSETS, _("Assets")),
 
 ]
 
@@ -525,6 +526,7 @@ AGENT_SCHEMAS = {
     SCHEMA_OUTPUT_WITH_MESSAGE: "scene.schemas.OutputWithMessageSchema",
     SCHEMA_CREATE_INSTRUCTIONS: "scene.schemas.CreateInstructionsSchema",
     SCHEMA_STORY_SCENES: "scene.schemas.StoryScenesSchema",
+    SCHEMA_ASSETS: "scene.schemas.AssetsSchema"
         
 }
 

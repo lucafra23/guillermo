@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+import json
+import redis
 
 from nautilus_trader.common.actor import Actor
 from nautilus_trader.config import ImportableActorConfig
@@ -18,6 +20,8 @@ class EMACrossStrategyConfig(ImportableActorConfig):
     fast_ema_period: int = 10
     slow_ema_period: int = 20
     trade_size: float = 100.0
+    redis_host: str = "localhost"
+    redis_port: int = 6379
 
 
 class EMACrossStrategy(NautilusStrategy):
@@ -45,6 +49,20 @@ class EMACrossStrategy(NautilusStrategy):
             f"Starting EMACrossStrategy for {self._instrument_id} "
             f"with fast_ema={self.config.fast_ema_period}, slow_ema={self.config.slow_ema_period}"
         )
+        
+        # Fire Redis Pub/Sub start event
+        try:
+            r = redis.Redis(host=self.config.redis_host, port=self.config.redis_port, db=0)
+            event_data = {
+                "event": "strategy_started",
+                "strategy": self.__class__.__name__,
+                "instrument_id": str(self._instrument_id),
+            }
+            r.publish("nautilus_events", json.dumps(event_data))
+            self.log.info("Fired start event to Redis Pub/Sub")
+        except Exception as e:
+            self.log.error(f"Failed to publish start event to Redis: {e}")
+
         self.subscribe_data(self._instrument_id, self._bar_type)
 
     def on_bar(self, bar: Bar):

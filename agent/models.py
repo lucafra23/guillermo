@@ -51,7 +51,37 @@ class GetContentsMixin:
     PRESET_REFINE_PROMPT = "refine_prompt"
     PRESET_SYNC_SCENE = "generate_scene"
     PRESET_WORKFLOW_OPTIMIZATION = "workflow_optimization"
-    
+    CONFIG_ASPECT_RATIO = "aspect_ratio"
+
+    ASPECT_RATIO_1_1 = "1:1"
+    ASPECT_RATIO_16_9 = "16:9"
+    ASPECT_RATIO_9_16 = "9:16"
+    ASPECT_RATIO_4_3 = "4:3"
+    ASPECT_RATIO_3_4 = "3:4"
+    ASPECT_RATIO_21_9 = "21:9"
+    ASPECT_RATIO_3_2 = "3:2"
+    ASPECT_RATIO_2_3 = "2:3"
+
+    ASPECT_RATIO_CHOICES = [
+        (ASPECT_RATIO_1_1, _("Square (1:1)")),
+        (ASPECT_RATIO_16_9, _("Landscape (16:9)")),
+        (ASPECT_RATIO_9_16, _("Portrait (9:16)")),
+        (ASPECT_RATIO_4_3, _("Standard (4:3)")),
+        (ASPECT_RATIO_3_4, _("Portrait Standard (3:4)")),
+        (ASPECT_RATIO_21_9, _("Ultrawide (21:9)")),
+        (ASPECT_RATIO_3_2, _("Classic Photo (3:2)")),
+        (ASPECT_RATIO_2_3, _("Portrait Photo (2:3)")),
+    ]
+
+    STATIC_CONFIG = {
+        CONFIG_ASPECT_RATIO: ASPECT_RATIO_9_16,
+    }
+
+
+    def config(self, field_name, default=None):
+        if field_name in self.STATIC_CONFIG:
+            return self.STATIC_CONFIG[field_name]
+        return default
 
     @classmethod
     def sync_prompt_categories(cls):
@@ -278,6 +308,10 @@ class GetContentsMixin:
             self.save()
         return out
 
+    def next_action_from_preset(self, preset, user, message=None):
+        "This method should be implemented in subclasses to define the next action based on the preset."
+        return []
+
     def task_from_action(self, action_type, user, message=None):
         """
         Parses an action_type string to extract the task_type and an optional preset.
@@ -363,6 +397,11 @@ class Prompt(models.Model):
     is_global = models.BooleanField(_("is global"), default=False)
     order = models.IntegerField(_("order"), default=0)
     history = HistoricalRecords()
+
+    class Meta:
+        ordering = ['order']
+        verbose_name = _('Prompt')
+        verbose_name_plural = _('Prompts')
 
     @classmethod
     def instructions(cls, preset, obj):
@@ -462,16 +501,16 @@ class Agent(models.Model):
             
             # Fields for advanced features (if available)
         }
-        
-        TokenUsage.objects.create(
-            user=user,
-            agent=self,
-            json_report=usage_dict,
-            tokens=usage.total_token_count,
-            preset=preset,
-            content_type=ContentType.objects.get_for_model(obj.__class__) if obj else None,
-            object_id=obj.pk if obj else None
-        )
+        if usage.total_token_count and usage_dict:
+            TokenUsage.objects.create(
+                user=user,
+                agent=self,
+                json_report=usage_dict,
+                tokens=usage.total_token_count,
+                preset=preset,
+                content_type=ContentType.objects.get_for_model(obj.__class__) if obj else None,
+                object_id=obj.pk if obj else None
+            )
 
     def __str__(self):
         return "{}".format(self.name)
@@ -529,8 +568,10 @@ class Agent(models.Model):
         contents.extend(instructions)
         config = types.GenerateContentConfig(
             image_config=types.ImageConfig(
-                aspect_ratio="9:16",
+                aspect_ratio=prompt_obj.config(GetContentsMixin.CONFIG_ASPECT_RATIO, default=GetContentsMixin.ASPECT_RATIO_1_1),
+                person_generation="ALLOW_ALL"
             )
+           
         )
         with self.get_genai_client(user) as client:
             response = client.models.generate_content(
@@ -628,6 +669,10 @@ class Agent(models.Model):
         # Check for errors if an image is not generated
         out = None
         from google.genai.types import FinishReason
+        if not response.candidates:
+            prompt_feedback = getattr(response, 'prompt_feedback', 'No candidates returned, reason unknown.')
+            raise ValueError(f"Image generation failed. The API returned no candidates. Feedback: {prompt_feedback}")
+
         if response.candidates[0].finish_reason != FinishReason.STOP:
             reason = response.candidates[0].finish_reason
             raise ValueError(f"Prompt Content Error: {reason}")
@@ -650,8 +695,7 @@ class Agent(models.Model):
     def get_instructions(self, user=None, preset=None, obj=None):
         instructions = [ item.prompt for item in self.instructions.all()]
         if preset:
-            instructions += Prompt.instructions(preset, obj)
-            
+            instructions += Prompt.instructions(preset, obj)           
         return [i for i in instructions if i and str(i).strip() != ""]
 
     def generate_text(self, preset, prompt_obj, instructions=[], message=None, schema=None, user=None, contents=None):
@@ -871,14 +915,43 @@ class Message(models.Model, GetContentsMixin, TaskHolder):
             'part_type': part_type,
             'key': key
         }
-        if isinstance(part_data, str):
+        from scene.schemas import SyncReport
+
+        def has_sync_report(data):
+            if isinstance(data, SyncReport):
+                return True
+            if isinstance(data, list):
+                return any(has_sync_report(x) for x in data)
+            if isinstance(data, dict):
+                return any(has_sync_report(x) for x in data.values())
+            return False
+
+        if isinstance(part_data, SyncReport):
+            part_kwargs['content_object'] = part_data.instance
+            part_kwargs['text'] = part_data.name
+            part_kwargs['json'] = {
+                'created': part_data.created,
+                'edited': part_data.edited,
+                'fields_edited': part_data.fields_edited
+            }
+        elif isinstance(part_data, list):
+            for i, part in enumerate(part_data):
+                self._create_part(part, order=order + i, part_type=part_type, key=key)
+            return
+        elif isinstance(part_data, dict):
+            if has_sync_report(part_data):
+                for i, (sub_key, sub_val) in enumerate(part_data.items()):
+                    full_key = f"{key}_{sub_key}" if key else sub_key
+                    self._create_part(sub_val, order=order + i, part_type=part_type, key=full_key)
+                return
+            else:
+                part_kwargs['json'] = part_data
+        elif isinstance(part_data, str):
             part_kwargs['text'] = part_data
         elif isinstance(part_data, FilerImage):
             part_kwargs['image'] = part_data
         elif isinstance(part_data, Image.Image):
             raise ValueError("PIL Image objects are not supported directly. Please save the image to a FilerImage first.")
-        elif isinstance(part_data, dict):
-            part_kwargs['json'] = part_data
         else:
             # Skip creating a part if the data type is not supported
             return
@@ -940,6 +1013,10 @@ class MessagePart(models.Model):
     order = models.PositiveIntegerField(_("order"), default=0)
     key = models.CharField(_("key"), max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE, null=True, blank=True)
+    object_id = models.PositiveIntegerField(null=True, blank=True)
+    content_object = GenericForeignKey('content_type', 'object_id')
 
     class Meta:
         ordering = ['order']

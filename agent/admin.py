@@ -98,7 +98,7 @@ class PromptAdmin(SimpleHistoryAdmin, ModelAdmin):
     list_filter = ('category', 'content_types')
     list_display_links = ('name',)
     autocomplete_fields = ('content_types', 'categories')
-    search_fields = ("name",)
+    search_fields = ("name", "prompt")
     ordering_field = "order"
 
     def display_content_types(self, obj):

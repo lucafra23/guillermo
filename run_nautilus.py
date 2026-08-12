@@ -80,21 +80,22 @@ print(gateway.is_logged_in(gateway.container))
 print(gateway.container.logs())
 
 # %%
-es_contract = IBContract(
-    secType="FUT",
-    exchange="CME",
-    localSymbol="ESM6",
-    lastTradeDateOrContractMonth="20260618",
+eurusd_contract = IBContract(
+    symbol="EUR",
+    secType="CASH",
+    exchange="IDEALPRO",
+    currency="USD",
 )
 
-contracts = [es_contract]
-tradable_instrument_id = "ESM6.CME"
+contracts = [eurusd_contract]
+tradable_instrument_id = "EUR.USD-CASH.IDEALPRO"
 
 
 # Configure the trading node
 instrument_provider = InteractiveBrokersInstrumentProviderConfig(
     load_contracts=frozenset(contracts),
     symbology_method=SymbologyMethod.IB_SIMPLIFIED,
+    load_all=True,
 )
 
 config_node = TradingNodeConfig(

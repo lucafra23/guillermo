@@ -2,7 +2,6 @@ import datetime
 import os
 import threading
 import time
-
 from nautilus_trader.adapters.interactive_brokers.common import IB
 from nautilus_trader.adapters.interactive_brokers.common import IBContract
 from nautilus_trader.adapters.interactive_brokers.common import IBOrderTags
@@ -12,6 +11,7 @@ from nautilus_trader.adapters.interactive_brokers.config import InteractiveBroke
 from nautilus_trader.adapters.interactive_brokers.config import (
     InteractiveBrokersInstrumentProviderConfig,
 )
+from nautilus_trader.core.message import Event
 from nautilus_trader.adapters.interactive_brokers.config import SymbologyMethod
 from nautilus_trader.core.uuid import UUID4
 from nautilus_trader.execution.messages import CancelAllOrders
@@ -27,7 +27,7 @@ from nautilus_trader.trading.config import StrategyConfig
 
 # %%
 class SimpleConditionsConfig(StrategyConfig, frozen=True):
-    tradable_instrument_id: str | None = "ESM6.CME"
+    tradable_instrument_id: str | None = "EUR.USD-CASH.IDEALPRO"
 
 
 class SimpleConditionsStrategy(Strategy):
@@ -42,7 +42,17 @@ class SimpleConditionsStrategy(Strategy):
     def on_order_pending_cancel(self, event):
         self.log.info(f"Order pending cancel: {event}")
 
+    def on_event(self, event: Event) -> None:
+        self.log.info(f"Received event: {event}")
+
     def on_start(self) -> None:
+        accounts = self.cache.accounts()
+        if len(accounts) == 0:
+            self.log.warning("No accounts found in cache")
+        else:
+            self.log.info(f"Found {len(accounts)} accounts in cache")
+            for account in accounts:
+                self.log.info(f"Account: {account}")
         for instrument in self.cache.instruments():
             if str(instrument.id) == self.tradable_instrument_id:
                 self.test_time_condition_order(instrument)

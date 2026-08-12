@@ -15,13 +15,22 @@
     {# Instructions Part #}
     {% with instructions=message.parts_instructions %}
         {% if instructions %}
-            <div class="flex items-start gap-3 my-3">
-                <div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center">
+            <div class="flex items-start gap-3 my-3" x-data="{ isExpanded: false }">
+                <div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex-shrink-0 flex items-center justify-center cursor-pointer" @click="isExpanded = !isExpanded">
                     <span class="material-symbols-outlined text-lg text-gray-500 dark:text-gray-400">integration_instructions</span>
                 </div>
-                <div class="bg-gray-100 dark:bg-gray-900/60 p-3 rounded-lg max-w-lg border border-gray-200/80 dark:border-gray-800">
-                    <div class="bg-white dark:bg-gray-800 text-yellow-800 dark:text-yellow-200 rounded-md p-3 space-y-2 border border-yellow-200 dark:border-yellow-800/50 shadow-sm">
-                        {% for part in instructions %}<p class="my-2">{{ part.text }}</p>{% endfor %}
+                <div class="bg-gray-100 dark:bg-gray-900/60 p-3 rounded-lg max-w-lg border border-gray-200/80 dark:border-gray-800 flex-grow">
+                    <div class="flex justify-between items-center cursor-pointer" @click="isExpanded = !isExpanded">
+                        <span class="text-xs font-semibold text-yellow-800 dark:text-yellow-200 uppercase tracking-wider">
+                            {% trans "System Instructions" %}
+                        </span>
+                        <button type="button" class="text-xs text-primary-600 dark:text-primary-400 font-semibold">
+                            <span x-show="!isExpanded">{% trans "Show" %}</span>
+                            <span x-show="isExpanded" style="display: none;">{% trans "Hide" %}</span>
+                        </button>
+                    </div>
+                    <div x-show="isExpanded" style="display: none;" class="bg-white dark:bg-gray-800 text-yellow-800 dark:text-yellow-200 rounded-md p-3 space-y-2 border border-yellow-200 dark:border-yellow-800/50 shadow-sm mt-2">
+                        {% for part in instructions %}<p class="my-2 text-xs leading-relaxed font-mono whitespace-pre-wrap">{{ part.text }}</p>{% endfor %}
                     </div>
                 </div>
             </div>

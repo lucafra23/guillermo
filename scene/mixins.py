@@ -1,6 +1,7 @@
+import yaml
 from django.contrib import admin
 from django.utils.html import format_html
-
+from .schemas import AssetsSchema, BackgroundSchema, CharacterSchema, PropSchema, VoiceSchema
 from django.utils.translation import gettext_lazy as _
 from django.urls import path
 from django.conf import settings
@@ -409,7 +410,8 @@ class AdminActionsMixin:
         for obj in queryset:
             if Task.createTaskIfQueueEnabled(obj, settings.TASK_TYPE_GENERATE_SCENE_ELEMENTS, owner=request.user) is None:
                 pass
-            self.message_user(request, "Generation task for elements started for scene: {}.".format(obj.name))
+            model_label = obj._meta.verbose_name
+            self.message_user(request, "Generation task for elements started for {}: {}.".format(model_label, obj.name))
 
     @admin.action(description="Generate Shots")
     def generate_scene_actions(self, request, queryset):
@@ -484,3 +486,35 @@ class RenderTypeMixin:
         if name == "is_animatic":
             return getattr(self, "render_type", None) == getattr(self, "RENDER_TYPE_ANIMATIC", "animatic")
         raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+
+class YAMLAssetsMixin:
+    def get_elements_as_yaml(self):
+        """
+        Serializes the model's main elements (locations, characters, props, voices)
+        into a YAML formatted string.
+        """
+        locations = [BackgroundSchema(name=b.name, prompt=b.prompt) for b in self.get_locations()]
+        characters = [CharacterSchema(name=c.name, prompt=c.prompt) for c in self.get_cast()]
+        props = [PropSchema(name=p.name, prompt=p.prompt) for p in self.get_props()]
+        voices = [
+            VoiceSchema(
+                name=v.name,
+                prompt=v.prompt,
+                google_voice=v.google_voice.name if v.google_voice else None
+            ) for v in self.get_voices()
+        ]
+
+        elements_data = AssetsSchema(
+            locations=locations,
+            characters=characters,
+            props=props,
+            voices=voices,
+        ).model_dump()
+
+        filtered_data = {k: v for k, v in elements_data.items() if v}
+        if not filtered_data:
+            return None
+
+        context_key = f"{self._meta.model_name}_context"
+        return yaml.dump({context_key: filtered_data}, indent=2, default_flow_style=False)

@@ -1,0 +1,70 @@
+{% load i18n %}
+<div class="generic-form-section-container bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg shadow-sm mb-6 overflow-hidden" 
+     id="section-{{ section_key }}"
+     x-data="{ 
+        isLoaded: {{ is_loaded|yesno:'true,false' }},
+        isLoading: false,
+        isCollapsed: {{ collapsible|yesno:'true,false' }},
+        loadSection() {
+            console.log('[GenericFormSection] loadSection triggered for key:', '{{ section_key }}');
+            if (this.isLoaded || this.isLoading) {
+                console.log('[GenericFormSection] Already loaded or loading. isLoaded:', this.isLoaded, 'isLoading:', this.isLoading);
+                return;
+            }
+            this.isLoading = true;
+            this.$refs.content.innerHTML = `<div class='flex flex-col items-center justify-center p-12 text-center w-full gap-2'><span class='material-symbols-outlined animate-spin text-4xl text-primary-600 dark:text-primary-400'>progress_activity</span><span class='text-sm text-gray-500 dark:text-gray-400 font-medium animate-pulse'>{% trans "Loading details..." %}</span></div>`;
+            const url = `{{ request.path }}refresh-section/{{ section_key }}/{{ content_type_id }}/{{ instance.pk }}/`;
+            console.log('[GenericFormSection] Fetching from URL:', url);
+            fetch(url)
+                .then(response => {
+                    console.log('[GenericFormSection] Fetch response status:', response.status);
+                    if (!response.ok) throw new Error('HTTP error ' + response.status);
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('[GenericFormSection] Fetch success, updating HTML content.');
+                    if (window.setHTMLWithScripts) {
+                        window.setHTMLWithScripts(this.$refs.content, data.html);
+                    } else {
+                        this.$refs.content.innerHTML = data.html;
+                    }
+                    this.isLoaded = true;
+                })
+                .catch(error => {
+                    console.error('[GenericFormSection] Error loading section:', error);
+                    this.$refs.content.innerHTML = `<div class='p-4 text-red-500'>Error loading details.</div>`;
+                })
+                .finally(() => this.isLoading = false);
+        }
+     }"
+     x-init="if (!isCollapsed) { loadSection(); }">
+    {% if title %}
+        <div class="flex items-center justify-between w-full px-4 py-3">
+            <h3 class="text-lg font-semibold text-gray-900 dark:text-white">{{ title }}</h3>
+            <div class="flex items-center gap-x-2">
+                <button type="button" 
+                        @click.stop="isLoaded = false; loadSection()"
+                        class="generic-section-refresh-btn cursor-pointer inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-primary-600 hover:text-primary-500 dark:text-primary-400 transition-colors group"
+                        title="{% trans 'Refresh Section' %}">
+                    <span class="material-symbols-outlined text-[16px] group-hover:rotate-180 transition-transform duration-500">refresh</span>
+                </button>
+                <button @click="isCollapsed = !isCollapsed; if (!isCollapsed) loadSection();" type="button" class="flex items-center justify-center w-8 h-8 text-gray-400 transition-colors rounded-full hover:bg-gray-100 hover:text-gray-500 dark:hover:bg-gray-800 dark:hover:text-gray-300">
+                    <span class="material-symbols-outlined" x-text="isCollapsed ? 'expand_more' : 'expand_less'"></span>
+                </button>
+            </div>
+        </div>
+    {% endif %}
+    
+    <div x-show="!isCollapsed" class="border-t border-gray-200 dark:border-gray-800" style="display: none;">
+        <div x-ref="content" class="p-4">
+            {% if is_loaded %}
+                {% include "sections/generic_form_section_content.html" %}
+            {% else %}
+                <div class="flex items-center justify-center py-6 text-xs text-gray-400 dark:text-gray-500 gap-2">
+                    <span class="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                    <span>{% trans "Loading details..." %}</span>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+</div>

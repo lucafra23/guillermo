@@ -16,6 +16,65 @@ const getAdminBaseUrl = (modelLabel = null) => {
     return window.location.pathname.split('/').slice(0, 4).join('/');
 };
 
+/**
+ * Replaces innerHTML of an element and forces the browser to evaluate and 
+ * execute any <script> tags contained inside the HTML.
+ */
+window.setHTMLWithScripts = (element, html) => {
+    element.innerHTML = html;
+
+    // requestAnimationFrame guarantees the DOM is fully laid out and painted
+    // before we initialize complex visual components like EasyMDE.
+    requestAnimationFrame(() => {
+        const scripts = element.querySelectorAll('script');
+        scripts.forEach(oldScript => {
+            const newScript = document.createElement('script');
+            Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+            
+            let scriptContent = oldScript.innerHTML;
+            
+            // Bypass DOMContentLoaded / load wrappers so scripts execute instantly on AJAX load
+            if (scriptContent.includes("DOMContentLoaded") || scriptContent.includes("window.addEventListener")) {
+                console.log("[AdminAjax] Bypassing lifecycle event wrappers for dynamic widget script.");
+                scriptContent = scriptContent
+                    .replace(/document\.addEventListener\s*\(\s*['"]DOMContentLoaded['"]\s*,\s*(?:function\s*\(\s*\)\s*\{|.*\s*=>\s*\{)/, '')
+                    .replace(/window\.addEventListener\s*\(\s*['"]load['"]\s*,\s*(?:function\s*\(\s*\)\s*\{|.*\s*=>\s*\{)/, '');
+            }
+
+            newScript.appendChild(document.createTextNode(scriptContent));
+            oldScript.parentNode.replaceChild(newScript, oldScript);
+        });
+
+        if (window.Alpine) {
+            console.log("[AdminAjax] Initializing Alpine.js tree for element:", element);
+            window.Alpine.initTree(element);
+        }
+
+        if (window.initializeMarkdownEditors) {
+            console.log("[AdminAjax] Initializing dynamic Markdown editors for element:", element);
+            window.initializeMarkdownEditors(element);
+        }
+    });
+};
+
+/**
+ * Safely syncs EasyMDE rich-text content back to the original textarea value.
+ */
+const syncEasyMDE = (textarea) => {
+    if (!textarea || !textarea.easymde) return;
+    try {
+        if (typeof textarea.easymde.save === 'function') {
+            textarea.easymde.save();
+        } else if (textarea.easymde.codemirror && typeof textarea.easymde.codemirror.save === 'function') {
+            textarea.easymde.codemirror.save();
+        } else if (typeof textarea.easymde.value === 'function') {
+            textarea.value = textarea.easymde.value();
+        }
+    } catch (err) {
+        console.error("[AdminAjax] Failed to sync EasyMDE value:", err);
+    }
+};
+
 const setChatFormState = (objectId, disabled) => {
     const formContainer = document.querySelector(`.chat-form[data-object-id="${objectId}"]`);
     if (!formContainer) return;
@@ -162,6 +221,11 @@ document.addEventListener('keydown', function(e) {
 
             row.querySelectorAll('input, textarea, select').forEach(el => {
                 if (el.name && !el.classList.contains('action-select')) {
+                    // Sync EasyMDE content if applicable before reading value
+                    if (el.tagName && el.tagName.toLowerCase() === 'textarea' && el.easymde) {
+                        console.log("[AdminAjax] Syncing EasyMDE on Shift+Enter save for:", el.name);
+                        syncEasyMDE(el);
+                    }
                     const fieldName = el.name.split('-').slice(-1)[0];
                     const val = el.type === 'checkbox' ? (el.checked ? 'on' : '') : el.value;
                     formData.set(fieldName, val);
@@ -253,6 +317,45 @@ document.addEventListener('change', function(e) {
             });
     }
 });
+
+async function copyImageToClipboard(imageUrl, buttonSpan) {
+    try {
+        buttonSpan.textContent = "Copying...";
+        const response = await fetch(imageUrl);
+        const blob = await response.blob();
+        
+        let pngBlob = blob;
+        // The System Clipboard API generally expects images in 'image/png' format.
+        // If the resource is not a PNG, we project it onto a canvas and export to PNG.
+        if (!blob.type.includes('png')) {
+            pngBlob = await new Promise((resolve, reject) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    canvas.toBlob((b) => {
+                        if (b) resolve(b);
+                        else reject(new Error("Canvas toBlob failed"));
+                    }, 'image/png');
+                };
+                img.onerror = () => reject(new Error("Failed to load image for PNG copy"));
+                img.src = imageUrl;
+            });
+        }
+
+        await navigator.clipboard.write([
+            new ClipboardItem({ [pngBlob.type]: pngBlob })
+        ]);
+        buttonSpan.textContent = "Copied Image!";
+    } catch (err) {
+        console.error("[AdminAjax] Failed to copy image:", err);
+        buttonSpan.textContent = "Copy Failed";
+    }
+}
 
 // Image Dropdown Menu Logic
 document.addEventListener('click', function(e) {
@@ -366,10 +469,27 @@ document.addEventListener('click', function(e) {
         menu.remove();
     };
 
+    const copyImageBtn = document.createElement('button');
+    copyImageBtn.className = 'w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 transition-colors';
+    copyImageBtn.innerHTML = '<span class="material-symbols-outlined text-[16px]">image</span> <span>Copy Image</span>';
+    copyImageBtn.onclick = (ev) => {
+        ev.stopPropagation();
+        const imageUrl = container.dataset.url;
+        if (imageUrl) {
+            const span = copyImageBtn.querySelector('span:last-child');
+            copyImageToClipboard(imageUrl, span).then(() => {
+                setTimeout(() => menu.remove(), 1000);
+            });
+        } else {
+            menu.remove();
+        }
+    };
+
     menu.appendChild(copyBtn);
     menu.appendChild(pasteBtn);
     menu.appendChild(downloadBtn);
     menu.appendChild(zoomBtn);
+    menu.appendChild(copyImageBtn);
     document.body.appendChild(menu);
 });
 
@@ -559,44 +679,146 @@ document.addEventListener('click', function(e) {
 
     // --- Chat Submission Logic ---
     const submitBtn = e.target.closest('.chat-submit-btn');
-    if (!submitBtn) return;
+    if (submitBtn) {
+        console.log("[AdminAjax] Chat submit button clicked:", submitBtn);
+        e.preventDefault();
 
-    
-    console.log("[AdminAjax] Chat submit button clicked:", submitBtn);
-    e.preventDefault();
+        const formContainer = submitBtn.closest('.chat-form');
+        if (formContainer) {
+            const objectId = formContainer.dataset.objectId;
+            const input = formContainer.querySelector('textarea[name="chat_input"]');
+            const actionSelect = formContainer.querySelector('select[name="action"]');
+            const messagesContainer = document.getElementById(`chat-messages-${objectId}`);
+            const url = `${getAdminBaseUrl()}/${formContainer.dataset.url}`;
+            const token = formContainer.querySelector('[name=csrfmiddlewaretoken]').value;
+            console.log(`[AdminAjax] Preparing to send chat input for object ID: ${objectId} | URL: ${url} | Input: ${input.value} | Token: ${token}`);
+            
+            // Manually construct FormData since we are not in a <form> element
+            const formData = new FormData();
+            formData.append('chat_input', input.value);
+            if (actionSelect) {
+                formData.append('action', actionSelect.value);
+            }
+            const originalInputValue = input.value;
 
-    
-    const formContainer = submitBtn.closest('.chat-form');
-    if (formContainer) {
-        const objectId = formContainer.dataset.objectId;
-        const input = formContainer.querySelector('textarea[name="chat_input"]');
-        const actionSelect = formContainer.querySelector('select[name="action"]');
-        const messagesContainer = document.getElementById(`chat-messages-${objectId}`);
-        const url = `${getAdminBaseUrl()}/${formContainer.dataset.url}`;
-        const token = formContainer.querySelector('[name=csrfmiddlewaretoken]').value;
-        console.log(`[AdminAjax] Preparing to send chat input for object ID: ${objectId} | URL: ${url} | Input: ${input.value} | Token: ${token}`);
-        
-        // Manually construct FormData since we are not in a <form> element
-        const formData = new FormData();
-        formData.append('chat_input', input.value);
-        if (actionSelect) {
-            formData.append('action', actionSelect.value);
+            // Disable form and show loading state
+            setChatFormState(objectId, true);
+            
+            // Append a temporary user message for immediate feedback
+            const tempUserMessage = `
+                <div class="flex items-start gap-3 justify-end">
+                    <div class="bg-primary-100 dark:bg-primary-900/50 text-primary-800 dark:text-primary-200 rounded-lg p-3 max-w-lg opacity-60">
+                        <p class="text-sm">${originalInputValue}</p>
+                    </div>
+                </div>`;
+            messagesContainer.insertAdjacentHTML('afterbegin', tempUserMessage);
+            messagesContainer.scrollTop = 0;
+
+            fetch(url, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': token
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Update the chat content with the server-rendered HTML
+                messagesContainer.innerHTML = data.html;
+                messagesContainer.scrollTop = 0;
+                input.value = ''; // Clear input on success
+
+                // If a task was created, start polling for the main object
+                if (data.status === 'task_created' && ["0", "1"].includes(String(data.task_status))) {
+                    console.log(`[AdminAjax] Task created from chat for object ID ${objectId}. Starting polling.`);
+                    monitoredObjectIds.add(objectId);
+                    // The form is already disabled by setChatFormState, now we just need to start polling.
+                    startPolling();
+                }
+            })
+            .finally(() => {
+                // Re-enable the form only if no task is actively running
+                if (!monitoredObjectIds.has(objectId)) {
+                    setChatFormState(objectId, false);
+                }
+                input.focus();
+            });
         }
-        const originalInputValue = input.value;
+        return;
+    }
 
-        // Disable form and show loading state
-        setChatFormState(objectId, true);
+    // --- Generic Form Submission Logic ---
+    const formSubmitBtn = e.target.closest('.generic-form-submit-btn');
+    if (formSubmitBtn) {
+        e.preventDefault();
+        console.log("[AdminAjax] >>> Generic form submit button clicked:", formSubmitBtn);
         
-        // Append a temporary user message for immediate feedback
-        const tempUserMessage = `
-            <div class="flex items-start gap-3 justify-end">
-                <div class="bg-primary-100 dark:bg-primary-900/50 text-primary-800 dark:text-primary-200 rounded-lg p-3 max-w-lg opacity-60">
-                    <p class="text-sm">${originalInputValue}</p>
-                </div>
-            </div>`;
-        messagesContainer.insertAdjacentHTML('afterbegin', tempUserMessage);
-        messagesContainer.scrollTop = 0;
+        const section = formSubmitBtn.closest('.generic-form-section-container');
+        if (!section) {
+            console.error("[AdminAjax] Failure: Parent container '.generic-form-section-container' not found for button:", formSubmitBtn);
+            return;
+        }
+        console.log("[AdminAjax] Found parent section:", section);
 
+        const formContainer = section.querySelector('.generic-form-body');
+        if (!formContainer) {
+            console.error("[AdminAjax] Failure: '.generic-form-body' not found inside section:", section);
+            return;
+        }
+        console.log("[AdminAjax] Found form container body:", formContainer);
+
+        // Force all EasyMDE markdown editors within the form container to sync their content
+        formContainer.querySelectorAll('textarea').forEach(textarea => {
+            if (textarea.easymde) {
+                console.log("[AdminAjax] Syncing EasyMDE editor content back to textarea:", textarea.name);
+                syncEasyMDE(textarea);
+            }
+        });
+
+        let url = formContainer.getAttribute('data-action');
+        if (url && !url.startsWith('/') && !url.startsWith('http')) {
+            url = `${getAdminBaseUrl()}/${url}`;
+        }
+        console.log("[AdminAjax] Target submit URL resolved to:", url);
+
+        const formData = new FormData();
+        formContainer.querySelectorAll('input, textarea, select').forEach(input => {
+            if (input.name) {
+                if (input.type === 'checkbox' || input.type === 'radio') {
+                    if (input.checked) {
+                        formData.append(input.name, input.value);
+                    }
+                } else if (input.type === 'file') {
+                    if (input.files.length > 0) {
+                        formData.append(input.name, input.files[0]);
+                    }
+                } else {
+                    formData.append(input.name, input.value);
+                }
+            }
+        });
+
+        // Print values being submitted for debugging
+        console.log("[AdminAjax] Assembled FormData pairs:");
+        for (let pair of formData.entries()) {
+            console.log(`  - ${pair[0]}:`, pair[1]);
+        }
+
+        const tokenEl = formContainer.querySelector('[name=csrfmiddlewaretoken]') || document.querySelector('[name=csrfmiddlewaretoken]');
+        if (!tokenEl) {
+            console.error("[AdminAjax] Failure: CSRF token input '[name=csrfmiddlewaretoken]' not found anywhere in the form container or document!");
+            alert("Error: CSRF token missing.");
+            return;
+        }
+        const token = tokenEl.value;
+        console.log("[AdminAjax] CSRF token successfully retrieved:", token.substring(0, 8) + "...");
+
+        // Visual feedback
+        formSubmitBtn.disabled = true;
+        formSubmitBtn.innerText = "Saving...";
+        section.style.opacity = '0.7';
+
+        console.log("[AdminAjax] Dispatching fetch POST request to:", url);
         fetch(url, {
             method: 'POST',
             body: formData,
@@ -604,28 +826,44 @@ document.addEventListener('click', function(e) {
                 'X-CSRFToken': token
             }
         })
-        .then(response => response.json())
+        .then(response => {
+            console.log("[AdminAjax] Received response with status:", response.status);
+            if (!response.ok && response.status !== 400) {
+                throw new Error("HTTP error " + response.status);
+            }
+            return response.json();
+        })
         .then(data => {
-            // Update the chat content with the server-rendered HTML
-            messagesContainer.innerHTML = data.html;
-            messagesContainer.scrollTop = 0;
-            input.value = ''; // Clear input on success
-
-            // If a task was created, start polling for the main object
-            if (data.status === 'task_created' && ["0", "1"].includes(String(data.task_status))) {
-                console.log(`[AdminAjax] Task created from chat for object ID ${objectId}. Starting polling.`);
-                monitoredObjectIds.add(objectId);
-                // The form is already disabled by setChatFormState, now we just need to start polling.
-                startPolling();
+            console.log("[AdminAjax] Decoded server JSON response data:", data);
+            if (data.status === 'success' || data.status === 'error') {
+                console.log("[AdminAjax] Replacing inner content with updated HTML.");
+                const contentArea = section.querySelector('[x-ref="content"]');
+                if (contentArea) {
+                    window.setHTMLWithScripts(contentArea, data.html);
+                } else {
+                    section.outerHTML = data.html;
+                }
             }
         })
+        .catch(err => {
+            console.error("[AdminAjax] Generic form submit error:", err);
+            alert("An error occurred while saving.");
+        })
         .finally(() => {
-            // Re-enable the form only if no task is actively running
-            if (!monitoredObjectIds.has(objectId)) {
-                setChatFormState(objectId, false);
-            }
-            input.focus();
+            console.log("[AdminAjax] Submission process completed.");
+            formSubmitBtn.disabled = false;
+            formSubmitBtn.innerText = "Save Details";
+            section.style.opacity = '1';
         });
+        return;
+    }
+
+    // --- Generic Section Refresh Logic ---
+    const refreshBtn = e.target.closest('.generic-section-refresh-btn');
+    if (refreshBtn) {
+        e.preventDefault();
+        // Alpine.js handles the click action on refreshBtn via @click="refreshSection()"
+        return;
     }
 });
 

@@ -107,7 +107,7 @@ class TaskGenerateScene:
 
 class TaskGenerateElements:
     """
-    Iterates through all actions of a scene and triggers image generation 
+    Iterates through all elements of a scene or story and triggers image generation 
     for any missing background (location), character (cast/actor), or prop,
     as well as voice generation for missing character voice samples.
     """
@@ -115,20 +115,11 @@ class TaskGenerateElements:
         self.task = task
 
     def process(self):
-        scene = self.task.subject
-        elements_to_generate = set()
-
-        for action in scene.actions.all():
-            if action.background and not action.background.image:
-                elements_to_generate.add(action.background)
-            if action.actor and not action.actor.image:
-                elements_to_generate.add(action.actor)
-            for char in action.cast.all():
-                if not char.image:
-                    elements_to_generate.add(char)
-            for prop in action.props.all():
-                if not prop.image:
-                    elements_to_generate.add(prop)
+        subject = self.task.subject
+        if hasattr(subject, 'get_missing_elements'):
+            elements_to_generate = subject.get_missing_elements()
+        else:
+            elements_to_generate = set()
 
         timestamp = get_next_scheduled_timestamp()
         for i, element in enumerate(elements_to_generate):
@@ -137,7 +128,7 @@ class TaskGenerateElements:
             task = Task.createTaskIfQueueEnabled(
                 subject=element,
                 task_type=settings.TASK_TYPE_GENERATE_IMAGE,
-                thr=scene,
+                thr=subject,
                 owner=self.task.owner,
                 process=False
             )
