@@ -3,29 +3,37 @@
 
 {% block content %}
 <div style="max-width: 46rem;">
-  <p style="font-size:1.05rem;">
-    {% blocktrans count counter=n_overwrite %}
-      <strong>{{ counter }}</strong> of the selected items already has an image, and generating
-      would replace it.
-    {% plural %}
-      <strong>{{ counter }}</strong> of the selected items already have images, and generating
-      would replace them.
-    {% endblocktrans %}
-  </p>
+  {% if n_overwrite %}
+    <p style="font-size:1.05rem;">
+      {% blocktrans count counter=n_overwrite %}
+        <strong>{{ counter }}</strong> of the selected items already has an image, and generating
+        would replace it.
+      {% plural %}
+        <strong>{{ counter }}</strong> of the selected items already have images, and generating
+        would replace them.
+      {% endblocktrans %}
+    </p>
+  {% else %}
+    <p style="font-size:1.05rem;">
+      {% blocktrans %}This is a large batch. Nothing would be overwritten, but it spends.{% endblocktrans %}
+    </p>
+  {% endif %}
 
   <p>
     {% blocktrans %}This would generate <strong>{{ n_total }}</strong> image(s){{ spend_total }}.{% endblocktrans %}
-    {% trans "The image being replaced is not recoverable from this screen." %}
+    {% if n_overwrite %}{% trans "The replaced plate is kept as the previous plate and can be restored with “Revert to previous plate”." %}{% endif %}
   </p>
 
   <p>{% trans "If you only meant to fill in the gaps, go back and use “Generate image (only the missing ones)” instead." %}</p>
 
-  <details style="margin: 1rem 0;">
-    <summary style="cursor:pointer;">{% trans "Show what would be replaced" %}</summary>
-    <ul style="margin-top:0.5rem; max-height:18rem; overflow:auto;">
-      {% for obj in overwrite %}<li>{{ obj }}</li>{% endfor %}
-    </ul>
-  </details>
+  {% if n_overwrite %}
+    <details style="margin: 1rem 0;">
+      <summary style="cursor:pointer;">{% trans "Show what would be replaced" %}</summary>
+      <ul style="margin-top:0.5rem; max-height:18rem; overflow:auto;">
+        {% for obj in overwrite %}<li>{{ obj }}</li>{% endfor %}
+      </ul>
+    </details>
+  {% endif %}
 
   <form method="post">
     {% csrf_token %}
@@ -34,8 +42,10 @@
     {% endfor %}
     <input type="hidden" name="action" value="{{ action_name }}">
     <input type="hidden" name="confirm_overwrite" value="yes">
+    {# Single-use, signed over this exact selection: a refresh or resend cannot re-fire the batch. #}
+    <input type="hidden" name="confirm_token" value="{{ confirm_token }}">
     <button type="submit" class="button" style="background:#b91c1c; color:#fff; padding:0.5rem 1rem; border:0; border-radius:4px;">
-      {% blocktrans %}Yes, generate {{ n_total }} and replace {{ n_overwrite }}{% endblocktrans %}
+      {% if n_overwrite %}{% blocktrans %}Yes, generate {{ n_total }} and replace {{ n_overwrite }}{% endblocktrans %}{% else %}{% blocktrans %}Yes, generate {{ n_total }}{% endblocktrans %}{% endif %}
     </button>
     <a href="." style="margin-left:1rem;">{% trans "Cancel" %}</a>
   </form>

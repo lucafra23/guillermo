@@ -418,9 +418,10 @@ GENAI_REQUEST_TIMEOUT_MS = int(os.getenv("GENAI_REQUEST_TIMEOUT_MS", "300000"))
 # no figure is shown, which is deliberate: a wrong number on a spend confirmation is worse than no
 # number, because people act on it.
 #
-# Coerced to a float here rather than at the use site because the consumer multiplies it by a
-# count: a str would silently repeat ("0.150.150.15") instead of multiplying, and only fail later
-# in the format spec.
+# Coerced to a float here because the consumer multiplies it by a count: a str would silently
+# repeat ("0.150.150.15") instead of multiplying, and only fail later in the format spec.
+# _spend_estimate coerces again at the use site, deliberately -- a deployment can override this
+# setting from anywhere, and the value is on the path that spends money.
 try:
     IMAGE_GENERATION_COST = float(os.getenv("IMAGE_GENERATION_COST", "0") or 0)
 except ValueError:
