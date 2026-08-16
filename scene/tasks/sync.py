@@ -15,6 +15,11 @@ import zipfile
 import tempfile
 
 
+class SyncImportError(Exception):
+    """Raised to roll back the whole import transaction on any resource error."""
+    pass
+
+
 class TaskSyncExport:
     def __init__(self, task):
         self.task = task
