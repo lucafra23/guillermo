@@ -84,6 +84,36 @@ class TaskGenerateComic:
         item.image_comic = item.generate_comic(user=self.task.owner, target_field="image_comic")
         item.save()
 
+class TaskLetterAction:
+    """Composite an Action's lettering onto its plate. Free: no model call, no spend."""
+
+    def __init__(self, task):
+        self.task = task
+
+    def process(self):
+        self.task.set_status(Task.TASK_STATUS_STARTED)
+        item = self.task.subject
+        try:
+            out = item.letter(user=self.task.owner)
+        except Exception as e:
+            # A malformed spec or a missing plate is an authoring error, not an outage: say
+            # which panel and why, so a bulk pass reports the bad ones instead of dying silently.
+            #
+            # Deliberately NOT re-raised. The status and the log are already recorded here, and
+            # the runner's handler in task/tasks.py does `e.status in TASK_RETRY_EXCEPTIONS` —
+            # a plain ValueError has no `.status`, so re-raising turns a clear "this panel's
+            # spec is bad" into an AttributeError in the Celery log and skips the runner's
+            # next_tasks dispatch entirely.
+            self.task.log(f"Lettering failed for action {item.id} ({item.name}): {e}")
+            self.task.set_status(Task.TASK_STATUS_ERROR)
+            return
+        self.task.log(
+            f"Lettered action {item.id} ({item.name})" if out
+            else f"Action {item.id} ({item.name}) has no lettering; cleared any stale composite"
+        )
+        self.task.set_status(Task.TASK_STATUS_SUCCESS)
+
+
 class TaskExtractScene:
     def __init__(self, task):
         self.task = task
