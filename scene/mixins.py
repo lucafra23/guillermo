@@ -373,6 +373,16 @@ class AdminActionsMixin:
             return ""
         return f" (about ${rate * count:.2f})"
 
+    @classmethod
+    def _needs_generate_confirmation(cls, n_overwrite, total):
+        """Confirm when existing art would be destroyed OR when the batch is simply large.
+
+        Both are ways to lose something you cannot get back. Kept as a named predicate
+        rather than inline so it can be tested directly: a test that restates the
+        condition tests the restatement, not the guard.
+        """
+        return bool(n_overwrite) or total > cls.CONFIRM_GENERATE_OVER
+
     CONFIRM_NONCE_KEY = "_generate_confirm_nonces"
 
     def _confirmation_token(self, request, pks):
@@ -455,9 +465,7 @@ class AdminActionsMixin:
         total = queryset.count()
         pks = list(queryset.values_list("pk", flat=True))
 
-        # Confirm when existing art would be destroyed OR when the batch is simply large. Both are
-        # ways to lose something you cannot get back.
-        needs_confirmation = bool(n_overwrite) or total > self.CONFIRM_GENERATE_OVER
+        needs_confirmation = self._needs_generate_confirmation(n_overwrite, total)
         if needs_confirmation and not self._confirmation_is_valid(request, pks):
             if request.POST.get("confirm_overwrite") == "yes":
                 # A confirmation was offered but its token was missing, altered, expired, or was
