@@ -565,7 +565,7 @@ class Agent(models.Model):
         from google.genai import types
         instructions = self.get_instructions(user=user, preset=preset, obj=prompt_obj)
         message.set_instructions(instructions)
-        contents.extend(instructions)
+        contents = instructions + contents
         config = types.GenerateContentConfig(
             image_config=types.ImageConfig(
                 aspect_ratio=prompt_obj.config(GetContentsMixin.CONFIG_ASPECT_RATIO, default=GetContentsMixin.ASPECT_RATIO_1_1),

@@ -518,3 +518,21 @@ class YAMLAssetsMixin:
 
         context_key = f"{self._meta.model_name}_context"
         return yaml.dump({context_key: filtered_data}, indent=2, default_flow_style=False)
+
+class ChangelistScrollToEditedMixin:
+    """
+    Mixin that appends the `#id={obj.id}` anchor hash to the redirect URL 
+    after adding or changing an object, so the changelist can scroll back 
+    to the edited row.
+    """
+    def response_add(self, request, obj, post_url_continue=None):
+        res = super().response_add(request, obj, post_url_continue)
+        if res.status_code in [301, 302] and '_continue' not in request.POST and '_addanother' not in request.POST:
+            res['Location'] = f"{res['Location']}#id={obj.id}"
+        return res
+
+    def response_change(self, request, obj):
+        res = super().response_change(request, obj)
+        if res.status_code in [301, 302] and '_continue' not in request.POST and '_addanother' not in request.POST:
+            res['Location'] = f"{res['Location']}#id={obj.id}"
+        return res

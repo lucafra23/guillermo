@@ -24,7 +24,7 @@ from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
 from agent.models import Message
 from .sections import AuthorSection, ElementSection, SceneSection, SceneCharactersSection, SceneLocationsSection, ScenePropsSection, RenderSection, MarkDownSection, ScriptSection
-from .mixins import ACTION_FIELDSETS, ELEMENT_FIELDSETS, SceneFilterMixin, StaffReadOnlyMixin, StoryFilterMixin, ViewYourOwnMixin, PromptPreviewMixin, AdminActionsMixin
+from .mixins import ACTION_FIELDSETS, ELEMENT_FIELDSETS, SceneFilterMixin, StaffReadOnlyMixin, StoryFilterMixin, ViewYourOwnMixin, PromptPreviewMixin, AdminActionsMixin, ChangelistScrollToEditedMixin
 from unfold.sections import TableSection, TemplateSection, render_to_string
 from rangefilter.filters import NumericRangeFilter
 from django.http import JsonResponse, HttpResponse
@@ -38,7 +38,7 @@ import markdown
 from django.contrib.auth.models import User
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from unfold.decorators import action
-        
+
 class PromptMarkdownMixin:
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         is_changelist = False
@@ -97,7 +97,7 @@ class DraftSection(MarkDownSection):
     key = "draft"   
 
 @admin.register(Story)
-class StoryAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
+class StoryAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
     inlines = [AuthorInline]
     autocomplete_fields = ['group']
     search_fields = ['name']
@@ -159,7 +159,7 @@ class StoryAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin,
 
 
 @admin.register(Scene)
-class SceneAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
+class SceneAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, AjaxTaskModelAdmin):
     search_fields = ['name']
     ajax_shift_fields = ['prompt']
     list_refresh = ['items']
@@ -238,7 +238,7 @@ class StoryProfileAdmin(ViewYourOwnMixin, StaffReadOnlyMixin, ModelAdmin):
     staff_readonly_fields = ['user']
 
 @admin.register(Character)
-class CharacterAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
+class CharacterAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
     list_display = ('name', 'pic', 'prompt', 'prompt_refine', 'link_story', 'last_tasks')
     list_refresh = ['pic']
     list_editable = ('prompt', 'prompt_refine')
@@ -251,7 +251,7 @@ class CharacterAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMi
     list_sections = [MessageHistorySection]
 
 @admin.register(Background)
-class BackgroundAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
+class BackgroundAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
     list_display = ('name', 'pic', 'prompt', 'prompt_refine', 'link_story', 'last_tasks')
     list_refresh = ['pic']
     list_editable = ('prompt','prompt_refine')
@@ -265,7 +265,7 @@ class BackgroundAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminM
 
 
 @admin.register(Prop)
-class PropAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
+class PropAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, StoryFilterMixin, AdminActionsMixin, AdminLinker, PromptPreviewMixin, AjaxTaskModelAdmin):
     search_fields = ['name']#
     list_refresh = ['pic']
     list_display = ('name', 'pic', 'prompt','prompt_refine', 'link_story', 'last_tasks')
@@ -302,7 +302,7 @@ class NudgeAdmin(AdminActionsMixin, ModelAdmin):
     )
 
 @admin.register(Action)
-class ActionAdmin(PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
+class ActionAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
     ajax_shift_fields = ['prompt', 'prompt_refine']    
     list_display = ('get_name', 'items', 'pic', 'prompt','prompt_refine', 'last_tasks')
     list_refresh = ['pic']
