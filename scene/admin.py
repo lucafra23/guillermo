@@ -163,7 +163,15 @@ class SceneAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHisto
     search_fields = ['name']
     ajax_shift_fields = ['prompt']
     list_refresh = ['items']
-    list_display = ['__str__', 'items', 'last_tasks']
+    # `order` decides the reading order of the story and was editable nowhere: absent from
+    # list_editable AND from every fieldset below, which (since fieldsets are declared) meant the
+    # change form never rendered it either. Reordering a story required a shell.
+    #
+    # list_editable is a strict subset of list_display or Django refuses to start with
+    # admin.E122 -- so the three editable columns have to be carried into list_display, not
+    # merged away when this meets a changed list_display upstream.
+    list_display = ['__str__', 'order', 'items', 'prompt', 'prompt_refine', 'last_tasks']
+    list_editable = ['order', 'prompt', 'prompt_refine']
     autocomplete_fields = ['story', 'author', 'instructions', 'locations', 'cast', 'props', 'voices']
     actions = ['clone','extract_scene',  'generate_scene_elements', 'generate_scene_actions', 'generate_scene_voices', 'generate_scene_comics', 'generate_render', 'refresh_render']
     list_filter = ['story', 'id']
@@ -183,7 +191,7 @@ class SceneAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHisto
         }),
         ("Settings", {
             "classes": ["tab"],
-            "fields": ["name", "author", "story"],
+            "fields": ["name", "order", "author", "story"],
         })
     )
     list_sections = [
