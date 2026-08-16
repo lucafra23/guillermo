@@ -281,13 +281,19 @@ class GetContentsMixin:
         return self.set_image_keeping_previous(out)
     
     def refine_image(self, save=True, user=None):
+        """Replace the plate with a refined one, keeping the plate it replaces.
+
+        This is a PAID generation that writes to `image`, and it used to assign directly. That
+        made "Revert to previous plate" a lie on one of the two paid paths: refine and revert sit
+        next to each other in the same admin action list, so the presence of revert implies refine
+        is covered by it. It was not - a refine destroyed the approved plate with no way back.
+        """
         image_agent = self.get_agent(Agent.OUTPUT_TYPE_IMAGE)
         out = image_agent.generate(self, preset=self.PRESET_REFINE, user=user, target_field="image")
         if save and out:
-            self.image = out
-            self.save()
+            return self.set_image_keeping_previous(out)
         return out
-    
+
     def generate_video(self, preset, user=None):
         agent = self.get_agent(Agent.OUTPUT_TYPE_VIDEO)
         self.video = agent.generate(self, preset=preset, user=user, target_field="video")
@@ -312,14 +318,9 @@ class GetContentsMixin:
         out = agent.generate(self, preset=preset, user=user, target_field="scene")
         return out
 
-    def refine_image(self, save=True, user=None):
-        image_agent = self.get_agent(Agent.OUTPUT_TYPE_IMAGE)
-        out = image_agent.generate(self, preset=self.PRESET_REFINE, user=user, target_field="image")
-        if save and out:
-            self.image = out
-            self.save()
-        return out
-    
+    # (A second, identical `refine_image` used to sit here. Python kept only the later definition,
+    # so the earlier one was dead and any fix applied to it would have had no effect at all.)
+
     def generate_text(self, preset=PRESET_REFINE_PROMPT, message=None, instructions=[], target_field="prompt", schema=None, agent=None, user=None):
         if agent is None:
             agent = self.get_agent(Agent.OUTPUT_TYPE_TEXT)
