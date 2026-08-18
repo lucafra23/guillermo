@@ -303,10 +303,16 @@ class TaskSyncImport:
             qs = Action.objects.all()
             if story_name:
                 qs = qs.filter(scene__story__name=story_name)
-            # Locate the panel the same way the reference is resolved: by (scene, name),
-            # the key import_id_fields uses. Keying this on (scene__order, order) meant the
-            # link could be written onto a different panel than the row describes.
-            panel = qs.filter(scene__name=row.get('scene'), name=row.get('name')).first()
+            # Locate the panel by (scene, NAME). `order` does not identify a panel -- 604
+            # panels in this book share only 530 (scene.order, order) pairs -- so keying this
+            # on order wrote the link onto whichever panel .first() happened to return.
+            #
+            # The `scene` column holds the scene's ORDER, not its name (see SceneResource), so
+            # the scene half is matched on order and only the panel half on name. Getting that
+            # backwards makes this whole pass a silent no-op: every forward reference, the ones
+            # that could not resolve inline and are the entire reason this second pass exists,
+            # is quietly dropped. Measured on the book: 35 of 187.
+            panel = qs.filter(scene__order=row.get('scene'), name=row.get('name')).first()
             if panel and panel.consistent_with_id != target.id:
                 panel.consistent_with = target
                 panel.save(update_fields=['consistent_with'])

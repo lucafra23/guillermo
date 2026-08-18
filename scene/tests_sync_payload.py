@@ -161,3 +161,63 @@ class ExportTests(TestCase):
         logged = " ".join(str(c) for c in task.log.call_args_list)
         self.assertIn("could NOT be added", logged)
         self.assertIn("panel.png", logged)
+
+
+class LinkConsistencyTests(TestCase):
+    """The second pass exists for FORWARD references, and only for them.
+
+    A panel referencing one that appears later in the CSV cannot resolve while that row is
+    being imported, so it is written as null and fixed afterwards by _link_consistency. If
+    that pass locates nothing, every forward reference is dropped in silence -- the import
+    still logs "604 rows, errors=False". Measured on the real book when this was keyed
+    wrongly: 35 of 187 links gone.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.story = Story.objects.create(name="Book")
+        cls.scene = Scene.objects.create(name="M08 - Support", story=cls.story, order=8)
+        cls.early = Action.objects.create(name="m8_1_siege", scene=cls.scene, order=0)
+        cls.late = Action.objects.create(name="m8_e_airdrop", scene=cls.scene, order=1)
+        # The collision the order key cannot see past: same (scene.order, order) as `early`.
+        cls.twin = Action.objects.create(name="m8_1_siege_alt", scene=cls.scene, order=0)
+
+    def _dataset(self, rows):
+        import tablib
+        ds = tablib.Dataset()
+        ds.headers = ["story", "scene", "order", "name", "consistent_with"]
+        for r in rows:
+            ds.append([r[h] for h in ds.headers])
+        return ds
+
+    def test_a_forward_reference_is_linked_afterwards(self):
+        ds = self._dataset([
+            # `early` points at `late`, which the CSV only introduces on the next row.
+            {"story": "Book", "scene": "8", "order": "0", "name": "m8_1_siege",
+             "consistent_with": "M08 - Support::m8_e_airdrop"},
+            {"story": "Book", "scene": "8", "order": "1", "name": "m8_e_airdrop",
+             "consistent_with": ""},
+        ])
+        TaskSyncImport(task=mock.Mock())._link_consistency(ds)
+        self.early.refresh_from_db()
+        self.assertEqual(self.early.consistent_with, self.late)
+
+    def test_the_link_lands_on_the_named_panel_not_its_order_twin(self):
+        ds = self._dataset([
+            {"story": "Book", "scene": "8", "order": "0", "name": "m8_1_siege_alt",
+             "consistent_with": "M08 - Support::m8_e_airdrop"},
+        ])
+        TaskSyncImport(task=mock.Mock())._link_consistency(ds)
+        self.twin.refresh_from_db()
+        self.early.refresh_from_db()
+        self.assertEqual(self.twin.consistent_with, self.late)
+        self.assertIsNone(self.early.consistent_with, "the link landed on the order twin")
+
+    def test_a_reference_that_cannot_be_resolved_leaves_the_panel_alone(self):
+        ds = self._dataset([
+            {"story": "Book", "scene": "8", "order": "0", "name": "m8_1_siege",
+             "consistent_with": "No Such Scene::nobody"},
+        ])
+        TaskSyncImport(task=mock.Mock())._link_consistency(ds)
+        self.early.refresh_from_db()
+        self.assertIsNone(self.early.consistent_with)
