@@ -4,18 +4,11 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    """Add Render.document and Render.config, the output and options of a graphic-novel render.
-
-    Deliberately contains ONLY this field. `makemigrations` also wanted to emit AlterField
-    operations for the `action` SlugField on Action/Background/Character/Prop/Scene/Story/SyncItem:
-    that is pre-existing `choices` drift between the models and the migration history, it predates
-    this change, and absorbing it here would make a comic-render PR look as though it altered seven
-    unrelated models. It is left where it was found.
-    """
+    """Add Render.document and Render.config, the output and options of a graphic-novel render."""
 
     dependencies = [
         ("filer", "0017_image__transparent"),
-        ("scene", "0012_action_lettering"),
+        ("scene", "0025_letter_action_choice"),
     ]
 
     operations = [
