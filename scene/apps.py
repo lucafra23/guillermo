@@ -9,4 +9,7 @@ class SceneConfig(AppConfig):
     def ready(self):
         # Import signals module to ensure receivers are connected
         from agent.signals import sync_categories
+        # scene.signals holds create_profile, which gives every new user a
+        # StoryProfile; without this import the receiver is never connected
+        from . import signals  # noqa: F401
         post_migrate.connect(sync_categories, sender=self)
