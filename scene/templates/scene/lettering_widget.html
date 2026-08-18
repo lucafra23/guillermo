@@ -1,0 +1,48 @@
+{# Visual lettering editor. The textarea below is the real form field: the JS keeps it in sync, #}
+{# and if the JS fails to load the field is still editable by hand rather than lost. #}
+<div class="lettering-editor"
+     data-plate="{{ widget.plate_url }}"
+     data-preview-url="{{ widget.preview_url }}"
+     data-action-id="{{ widget.action_id }}">
+
+  {% if not widget.plate_url %}
+    <p class="lettering-empty">
+      This panel has no image yet. Generate the plate first — lettering is composited onto it,
+      and there is nothing to position against until it exists.
+    </p>
+  {% endif %}
+
+  <div class="lettering-toolbar">
+    <select class="lettering-add-type" aria-label="Container type">
+      <option value="bubble">bubble — speech</option>
+      <option value="thought">thought — inner monologue</option>
+      <option value="caption">caption — narrator</option>
+      <option value="plaque">plaque — in-world text</option>
+      <option value="ui">ui — on-screen text</option>
+      <option value="namecard">namecard — NAME|descriptor</option>
+      <option value="screen">screen — bare text, no container</option>
+    </select>
+    <button type="button" class="lettering-add">Add</button>
+    <button type="button" class="lettering-preview">Preview (free)</button>
+    <button type="button" class="lettering-revert" title="Discard the preview and show the bare plate">Show plate</button>
+    <span class="lettering-status" role="status"></span>
+  </div>
+
+  <div class="lettering-body">
+    <div class="lettering-stage">
+      {% if widget.plate_url %}
+        <img class="lettering-plate" src="{{ widget.plate_url }}" alt="panel plate">
+      {% else %}
+        <div class="lettering-plate lettering-plate-missing"></div>
+      {% endif %}
+      <div class="lettering-overlay"></div>
+    </div>
+    <div class="lettering-list"></div>
+  </div>
+
+  <details class="lettering-raw">
+    <summary>Raw JSON</summary>
+    <textarea name="{{ widget.name }}" class="lettering-json" rows="10"
+      {% for k, v in widget.attrs.items %}{{ k }}="{{ v }}" {% endfor %}>{{ widget.value }}</textarea>
+  </details>
+</div>

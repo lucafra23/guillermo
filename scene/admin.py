@@ -1,6 +1,9 @@
 import io
+import logging
 import os
 import zipfile
+
+logger = logging.getLogger(__name__)
 
 from django.contrib import admin, messages
 from httpcore import request
@@ -20,6 +23,8 @@ from unfold.admin import StackedInline
 from .models import ActionOrganizer, Character, Scene, Preset, Action, Background, SceneOrganizer, StoryGroup, Style, Prop, ComicAction, RenderItem, VideoAction, Render, Story, StoryProfile, Voice, VoiceAction, Author, Nudge, ContactRequest, WorkShop, Sync, SyncItem
 from .admin_utils import AdminLinker
 from agent.admin_utils import AjaxTaskModelAdmin
+from django import forms
+from .widgets import LetteringFormField, LetteringWidget
 from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
 from agent.models import Message
@@ -359,9 +364,37 @@ class VideoActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_sections = [MessageHistorySection]
 
 
+class LetteringAdminForm(forms.ModelForm):
+    """Swaps the raw JSON box for the visual editor, and validates through the compositor."""
+
+    class Meta:
+        model = ComicAction
+        fields = "__all__"
+        field_classes = {"lettering": LetteringFormField}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        field = self.fields.get("lettering")
+        if not field:
+            return
+        instance = getattr(self, "instance", None)
+        plate_url = ""
+        if instance and instance.pk and instance.image:
+            try:
+                plate_url = instance.image.url
+            except Exception:
+                plate_url = ""
+        field.widget = LetteringWidget(
+            plate_url=plate_url,
+            preview_url=reverse("admin:scene_lettering_preview"),
+            action_id=instance.pk if instance and instance.pk else "",
+        )
+
+
 @admin.register(ComicAction)
 class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
     ajax_shift_fields = ['prompt_comic']
+    form = LetteringAdminForm
     list_display = ('name', 'items', 'pic', 'pic_comic', 'prompt_comic', 'last_tasks')
     list_editable = ['prompt_comic']
     list_filter = ["scene__story", "scene", "id"]
@@ -371,6 +404,91 @@ class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     actions = ['letter_action', 'generate_comic', 'comic_to_video']
     list_sections = [MessageHistorySection]
     fieldsets = ACTION_FIELDSETS
+
+    def get_urls(self):
+        urls = super().get_urls()
+        return [
+            path(
+                'lettering-preview/',
+                self.admin_site.admin_view(self.lettering_preview_view),
+                name='scene_lettering_preview',
+            ),
+        ] + urls
+
+    def lettering_preview_view(self, request):
+        """Composite a candidate spec and return its URL. Saves nothing.
+
+        The preview runs through the SAME compositor as the real letter pass, because an
+        approximation would defeat the purpose: the reason lettering is composited rather than
+        drawn by the image model is that what you approve has to be exactly what ships.
+
+        Nothing here touches the Action: not `image` (paid art), not `image_comic` (which would
+        make an unsaved experiment look committed), not `lettering`. The output goes to a path
+        keyed by action id and is overwritten by the next preview.
+        """
+        import json as _json
+        import os
+
+        from django.conf import settings as _settings
+
+        from .lettering import LetteringError, draw_overlay, normalise_elements
+
+        if request.method != "POST":
+            return JsonResponse({"error": "Method not allowed"}, status=405)
+        if not self.has_change_permission(request):
+            return JsonResponse({"error": "You do not have permission to edit panels."}, status=403)
+
+        # `filter(pk=...)` is not a validator: a non-numeric id reaches AutoField.get_prep_value
+        # and raises ValueError, which surfaces as a 500 (and, with DEBUG on, a full traceback).
+        try:
+            action_id = int(request.POST.get("action_id") or "")
+        except (TypeError, ValueError):
+            return JsonResponse({"error": "Invalid panel id."}, status=400)
+
+        # get_queryset(), not Action.objects: it carries StoryFilterMixin's per-story scoping, so
+        # an author scoped to one story cannot composite against another story's paid plates.
+        action = self.get_queryset(request).filter(pk=action_id).first()
+        if action is None:
+            return JsonResponse({"error": "Panel not found. Save it once before previewing."}, status=404)
+        if not action.image:
+            return JsonResponse({"error": "This panel has no image yet — generate the plate first."}, status=400)
+
+        try:
+            elements = normalise_elements(_json.loads(request.POST.get("lettering") or "[]"))
+        except (TypeError, ValueError) as e:
+            return JsonResponse({"error": f"Lettering is not valid JSON: {e}"}, status=400)
+        except LetteringError as e:
+            return JsonResponse({"error": str(e)}, status=400)
+
+        # Keyed by panel AND user. Keyed on the panel alone, two authors previewing the same panel
+        # shared one path: each saw the other's composite under their own URL, so you could approve
+        # someone else's version of the page — which is precisely the invariant this feature exists
+        # to protect ("what you approve is exactly what ships").
+        relative = f"lettering_previews/preview_{action.pk}_{request.user.pk}.png"
+        absolute = os.path.join(_settings.MEDIA_ROOT, relative)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+        # Compose to a temp file and move it into place. PIL's save() truncates in place, so a
+        # reader that fetches mid-write gets a half-written PNG; os.replace is atomic on the same
+        # filesystem, so a reader sees either the old file or the new one.
+        # The suffix stays .png: Pillow picks its format from the file extension, so a plain
+        # ".tmp" makes save() raise "unknown file extension".
+        temporary = f"{absolute}.{os.getpid()}.tmp.png"
+        try:
+            draw_overlay(action.image.path, elements, temporary)
+            os.replace(temporary, absolute)
+        except Exception as e:
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+            # Deliberately not echoing the exception: it is typically an absolute MEDIA_ROOT path.
+            logger.exception("Lettering preview failed for action %s", action.pk)
+            return JsonResponse(
+                {"error": "Could not composite this lettering. Check the server log for details."},
+                status=400,
+            )
+
+        return JsonResponse({"url": _settings.MEDIA_URL + relative})
 
 
 @admin.register(VoiceAction)
