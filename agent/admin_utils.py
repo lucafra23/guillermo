@@ -1,6 +1,8 @@
 
 from django.conf import settings
 from django.http import JsonResponse
+from django.core.exceptions import PermissionDenied
+from django.http import HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.urls import path, reverse
 from django.utils.html import format_html
@@ -42,8 +44,15 @@ class AjaxTaskModelAdmin(ModelAdmin):
         return JsonResponse({'ajax_shift_fields': fields})
 
     def get_last_tasks(self, request, object_id):
+        """Poll one row's task state. Read-only, but still not public to all staff.
+
+        It serialises the whole object, so a staff account with no rights to this model could
+        read every field of every row through it, and the per-story scoping did not apply.
+        """
         # 1. Get the object
-        obj = get_object_or_404(self.model, pk=object_id)
+        obj = get_object_or_404(self.get_queryset(request), pk=object_id)
+        if not self.has_view_permission(request, obj):
+            raise PermissionDenied
         obj.refresh_from_db()
         last_task = obj.tasks.first()
         status = last_task.status if last_task else None
@@ -90,15 +99,43 @@ class AjaxTaskModelAdmin(ModelAdmin):
         }
         return JsonResponse(response_data)
     
+    def ajax_editable_fields(self):
+        """The fields this endpoint may write.
+
+        Declared, never inferred. The previous version walked `obj._meta.fields` and saved any
+        POST key that matched a field name, which made the endpoint a general-purpose writer for
+        every column on the model -- including ones the admin renders read-only.
+        """
+        declared = list(getattr(self, "ajax_shift_fields", []) or [])
+        declared += list(getattr(self, "list_editable", []) or [])
+        declared += list(getattr(self, "list_refresh", []) or [])
+        return {name for name in declared}
+
     def save_ajax_fields(self, obj, request):
-        """Updates model fields from POST data, handling Booleans and Foreign Keys."""
+        """Updates the editable model fields from POST data."""
+        allowed = self.ajax_editable_fields()
         for field in obj._meta.fields:
-            if field.name in request.POST:
+            if field.name in request.POST and field.name in allowed:
                 handle_ajax_field_save(obj, field.name, request.POST.get(field.name))
 
     def ajax_update_view(self, request, object_id):
-        """Standard entry point for AJAX updates: saves fields then triggers tasks."""
-        obj = get_object_or_404(self.model, pk=object_id)
+        """Standard entry point for AJAX updates: saves fields then triggers tasks.
+
+        `admin_site.admin_view` only asks whether the user is active staff -- it knows nothing
+        about this model. Without the checks below, any staff account could write any field on
+        any row and start a PAID generation through this URL, while the changelist for the same
+        model correctly answered 403. Every other spend guard in the admin sits on the actions,
+        so this endpoint walked around all of them.
+        """
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+
+        # get_queryset(), not the raw manager: it carries the per-story scoping the filter
+        # mixins apply, so a user cannot reach a row that their own changelist would hide.
+        obj = get_object_or_404(self.get_queryset(request), pk=object_id)
+        if not self.has_change_permission(request, obj):
+            raise PermissionDenied
+
         target_field = request.POST.get('target_field')
         self.save_ajax_fields(obj, request)
         self.trigger_ajax_task(request, obj, target_field)
