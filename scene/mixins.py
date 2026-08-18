@@ -177,21 +177,38 @@ class ModelDisplayMixin:
         return _("No contents")
     voice_player.short_description = _("Play")
 
+def get_story_profile(request):
+    """The StoryProfile of the request's user, or None.
+
+    A missing profile is a filtering preference nobody has expressed, not an error, and it must
+    never be the reason a changelist 500s. The reverse one-to-one raises RelatedObjectDoesNotExist
+    on access -- which subclasses AttributeError, so `getattr(user, 'story_profile', None)` hands
+    back None rather than raising, and the None then fails on the next attribute instead. Both
+    shapes are handled here so no caller has to remember which one it is dealing with.
+    """
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated:
+        return None
+    return getattr(user, "story_profile", None)
+
+
 class SceneFilterMixin:
     # anything that has a scene foreign key can use this mixin to filter by the user's current scene
 
     def save_model(self, request, obj, form, change):
-        if hasattr(self, 'scene') and obj.scene is None and request.user.story_profile.scene:
-            obj.scene = request.user.story_profile.scene
+        profile = get_story_profile(request)
+        if hasattr(self, 'scene') and obj.scene is None and profile and profile.scene:
+            obj.scene = profile.scene
         save_obj = super().save_model(request, obj, form, change)
         return save_obj
 
     def get_queryset(self, request):
         qs = super().get_queryset(request) #call original queryset method that you are overriding
-        if request.user.story_profile.enable_filters:
-            if request.user.story_profile.scene:
-                return qs.filter(scene=request.user.story_profile.scene)
-            return qs.filter(scene__story=request.user.story_profile.get_current_story())
+        profile = get_story_profile(request)
+        if profile and profile.enable_filters:
+            if profile.scene:
+                return qs.filter(scene=profile.scene)
+            return qs.filter(scene__story=profile.get_current_story())
         return qs
 
 class StoryFilterMixin:
@@ -199,17 +216,16 @@ class StoryFilterMixin:
     
     def save_model(self, request, obj, form, change):
         if not change:
-            story = request.user.story_profile.get_current_story()
+            profile = get_story_profile(request)
+            story = profile.get_current_story() if profile else None
             if story and hasattr(obj, 'story') and getattr(obj, 'story') is None:
                 obj.story = story
         super().save_model(request, obj, form, change)
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        profile = getattr(request.user, 'story_profile', None)
-        
-            
-        story = profile.get_current_story()
+        profile = get_story_profile(request)
+        story = profile.get_current_story() if profile else None
         if not story:
             return qs
 
