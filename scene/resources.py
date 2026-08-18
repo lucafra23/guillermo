@@ -1,3 +1,4 @@
+import logging
 import os
 import requests
 from django.core.files.base import ContentFile
@@ -5,6 +6,8 @@ from import_export import resources, fields, widgets
 from filer.models.imagemodels import Image as FilerImage
 from filer.models.filemodels import File as FilerFile
 from .models import Story, Scene, Action, Character, Prop, Background, Voice, Style, Theme, StoryGroup
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +150,50 @@ class ActionRefWidget(widgets.ForeignKeyWidget):
     # the import reports success and the panel is simply drawn against the wrong character.
     # The same names give 604 distinct keys, zero collisions.
     SEP = "::"
+    ESC = "\\"
+
+    @classmethod
+    def _escape(cls, text):
+        """Make one name safe to sit next to the separator.
+
+        Names are free text. Without this, a panel called "a::b" renders to
+        "M00::a::b", which splits back into scene "M00::a" and panel "b", resolves to
+        nothing, and drops the link in silence -- the exact defect this key was changed
+        to fix, returning through the delimiter itself.
+        """
+        return (text or "").replace(cls.ESC, cls.ESC * 2).replace(cls.SEP, cls.ESC + cls.SEP)
+
+    @classmethod
+    def _split(cls, value):
+        """Split on the last UNESCAPED separator. Returns (scene_name, panel_name) or None."""
+        out, buf, parts = [], [], []
+        i = 0
+        while i < len(value):
+            ch = value[i]
+            if ch == cls.ESC and i + 1 < len(value):
+                buf.append(value[i + 1])          # whatever was escaped, verbatim
+                i += 2
+                continue
+            if value.startswith(cls.SEP, i):
+                parts.append("".join(buf))
+                buf = []
+                i += len(cls.SEP)
+                continue
+            buf.append(ch)
+            i += 1
+        parts.append("".join(buf))
+        if len(parts) < 2:
+            return None
+        # Everything before the final separator is the scene: a scene name may legitimately
+        # contain one, and the panel name is the last field.
+        return cls.SEP.join(parts[:-1]), parts[-1]
 
     def render(self, value, obj=None):
         if not value:
             return ""
         scene = getattr(value, "scene", None)
-        return f"{getattr(scene, 'name', '')}{self.SEP}{value.name or ''}"
+        return (f"{self._escape(getattr(scene, 'name', ''))}"
+                f"{self.SEP}{self._escape(value.name or '')}")
 
     def clean(self, value, row=None, **kwargs):
         if not value:
@@ -164,10 +205,18 @@ class ActionRefWidget(widgets.ForeignKeyWidget):
             qs = qs.filter(scene__story__name=story_name)
 
         if self.SEP in value:
-            # rsplit: a scene name may contain a single colon, and splitting from the left
-            # would hand the tail of the scene name to the panel lookup.
-            scene_name, action_name = value.rsplit(self.SEP, 1)
-            return qs.filter(scene__name=scene_name.strip(), name=action_name.strip()).first()
+            split = self._split(value)
+            if split:
+                scene_name, action_name = split
+                matches = qs.filter(scene__name=scene_name.strip(), name=action_name.strip())
+                # Nothing enforces that (scene name, panel name) is unique -- it is a
+                # convention, not a constraint -- so an ambiguous reference is REPORTED
+                # rather than resolved by whichever row sorts first.
+                if matches.count() > 1:
+                    logger.warning(
+                        "consistent_with %r matches %d panels; linking the first. Rename them, "
+                        "or the link is decided by row order.", value, matches.count())
+                return matches.first()
 
         # Legacy "<scene.order>:<panel.order>" from a zip exported before this change. Kept
         # so an older archive still imports, ambiguity and all -- that is what it recorded.

@@ -124,9 +124,27 @@ class TaskSyncImport:
     # a guard firing on the payload it was written to carry. Env-driven now, with a default
     # that leaves actual room, and paired with a free-space check, which is the resource a
     # runaway extraction really exhausts.
-    MAX_EXTRACT_BYTES = int(getattr(settings, 'SYNC_MAX_EXTRACT_BYTES', 0) or 8 * 1024 ** 3)
-    # Leave the volume usable after unpacking, rather than filling it to the last byte.
-    MIN_FREE_BYTES_AFTER = int(getattr(settings, 'SYNC_MIN_FREE_BYTES_AFTER', 0) or 512 * 1024 ** 2)
+    #
+    # None means "ask the settings"; a number set here wins, which is how a caller or a test
+    # pins a limit. Read per call rather than at import so a deployment's value is not frozen
+    # into the class by whichever module imported it first.
+    MAX_EXTRACT_BYTES = None
+    MIN_FREE_BYTES_AFTER = None
+    DEFAULT_MAX_EXTRACT_BYTES = 8 * 1024 ** 3
+    DEFAULT_MIN_FREE_BYTES_AFTER = 512 * 1024 ** 2
+
+    def _limit(self, attribute, setting_name, default):
+        """An explicit 0 means 0.
+
+        `x or default` reads a configured 0 as "unset" and hands back the default, so an
+        operator who set the cap to 0 to freeze imports would get 8 GiB of permission instead --
+        the opposite of what they asked for.
+        """
+        pinned = getattr(self, attribute)
+        if pinned is not None:
+            return int(pinned)
+        value = getattr(settings, setting_name, None)
+        return int(default if value is None else value)
 
     def __init__(self, task):
         self.task = task
@@ -135,23 +153,27 @@ class TaskSyncImport:
         """Extract with path-traversal and total-size guards (defence in depth on top
         of stdlib sanitisation)."""
         dest_real = os.path.realpath(dest)
+        cap = self._limit("MAX_EXTRACT_BYTES", "SYNC_MAX_EXTRACT_BYTES",
+                          self.DEFAULT_MAX_EXTRACT_BYTES)
+        keep_free = self._limit("MIN_FREE_BYTES_AFTER", "SYNC_MIN_FREE_BYTES_AFTER",
+                                self.DEFAULT_MIN_FREE_BYTES_AFTER)
         total = 0
         for info in zf.infolist():
             target = os.path.realpath(os.path.join(dest, info.filename))
             if target != dest_real and not target.startswith(dest_real + os.sep):
                 raise SyncImportError(f"Unsafe path in zip: {info.filename}")
             total += info.file_size
-            if total > self.MAX_EXTRACT_BYTES:
+            if total > cap:
                 raise SyncImportError(
                     f"Refusing to extract: archive exceeds size cap of "
-                    f"{self.MAX_EXTRACT_BYTES / 1024 ** 3:.2f} GiB. Raise "
+                    f"{cap / 1024 ** 3:.2f} GiB. Raise "
                     f"SYNC_MAX_EXTRACT_BYTES if this book is genuinely that large.")
 
         # The cap bounds what we are WILLING to write; this bounds what the disk can take.
         # Filling the volume out from under a running instance is the more likely accident
         # of the two, and it takes the whole app down rather than just this import.
         free = shutil.disk_usage(dest_real).free
-        if total > free - self.MIN_FREE_BYTES_AFTER:
+        if total > free - keep_free:
             raise SyncImportError(
                 f"Refusing to extract: {total / 1024 ** 3:.2f} GiB to unpack, "
                 f"{free / 1024 ** 3:.2f} GiB free on the destination volume.")

@@ -34,7 +34,9 @@ class ExtractionGuardTests(SimpleTestCase):
 
     def test_the_default_cap_clears_the_real_book(self):
         """0.956 GiB measured today. A cap under that is a scheduled failure."""
-        self.assertGreater(self.importer.MAX_EXTRACT_BYTES, int(1.5 * 1024 ** 3))
+        resolved = self.importer._limit("MAX_EXTRACT_BYTES", "SYNC_MAX_EXTRACT_BYTES",
+                                        self.importer.DEFAULT_MAX_EXTRACT_BYTES)
+        self.assertGreater(resolved, int(1.5 * 1024 ** 3))
 
     def test_an_oversized_archive_is_still_refused(self):
         self.importer.MAX_EXTRACT_BYTES = 10
@@ -221,3 +223,71 @@ class LinkConsistencyTests(TestCase):
         TaskSyncImport(task=mock.Mock())._link_consistency(ds)
         self.early.refresh_from_db()
         self.assertIsNone(self.early.consistent_with)
+
+
+class SeparatorTests(TestCase):
+    """Names are free text, and the key sits between two of them."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.story = Story.objects.create(name="Book")
+        cls.plain = Scene.objects.create(name="M00", story=cls.story, order=0)
+        cls.odd = Scene.objects.create(name="M01::special", story=cls.story, order=1)
+        cls.panel_odd_name = Action.objects.create(name="a::b", scene=cls.plain, order=0)
+        cls.panel_in_odd_scene = Action.objects.create(name="ordinary", scene=cls.odd, order=0)
+        cls.backslash = Action.objects.create(name="back\\slash", scene=cls.plain, order=1)
+
+    def widget(self):
+        return ActionResource().fields["consistent_with"].widget
+
+    def test_a_panel_name_containing_the_separator_survives_the_round_trip(self):
+        w = self.widget()
+        self.assertEqual(w.clean(w.render(self.panel_odd_name), row={"story": "Book"}),
+                         self.panel_odd_name)
+
+    def test_a_scene_name_containing_the_separator_survives_too(self):
+        w = self.widget()
+        self.assertEqual(w.clean(w.render(self.panel_in_odd_scene), row={"story": "Book"}),
+                         self.panel_in_odd_scene)
+
+    def test_a_backslash_in_a_name_survives(self):
+        w = self.widget()
+        self.assertEqual(w.clean(w.render(self.backslash), row={"story": "Book"}),
+                         self.backslash)
+
+    def test_an_ambiguous_reference_is_logged_rather_than_guessed_at_silently(self):
+        twin_scene = Scene.objects.create(name="M00", story=self.story, order=9)
+        Action.objects.create(name="a::b", scene=twin_scene, order=0)
+        w = self.widget()
+        with self.assertLogs("scene.resources", level="WARNING") as captured:
+            got = w.clean(w.render(self.panel_odd_name), row={"story": "Book"})
+        self.assertIsNotNone(got)
+        self.assertTrue(any("matches 2 panels" in line for line in captured.output),
+                        captured.output)
+
+
+class CapSettingTests(SimpleTestCase):
+    """A configured 0 is a decision, not an omission."""
+
+    def test_zero_in_the_settings_refuses_everything(self):
+        from django.test import override_settings
+        importer = TaskSyncImport(task=mock.Mock())
+        with override_settings(SYNC_MAX_EXTRACT_BYTES=0):
+            with tempfile.TemporaryDirectory() as dest:
+                with self.assertRaises(SyncImportError) as ctx:
+                    importer._safe_extract(_zip_with([("a.txt", b"x")]), dest)
+        self.assertIn("size cap", str(ctx.exception))
+
+    def test_an_unset_cap_uses_the_default(self):
+        from django.test import override_settings
+        importer = TaskSyncImport(task=mock.Mock())
+        with override_settings(SYNC_MAX_EXTRACT_BYTES=None):
+            with tempfile.TemporaryDirectory() as dest:
+                importer._safe_extract(_zip_with([("a.txt", b"x")]), dest)   # no raise
+
+    def test_a_value_pinned_on_the_instance_still_wins(self):
+        importer = TaskSyncImport(task=mock.Mock())
+        importer.MAX_EXTRACT_BYTES = 1
+        with tempfile.TemporaryDirectory() as dest:
+            with self.assertRaises(SyncImportError):
+                importer._safe_extract(_zip_with([("a.txt", b"x" * 50)]), dest)
