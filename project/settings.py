@@ -477,6 +477,16 @@ TASK_TYPE_GENERATE_SCENE_VOICES = 'generate_scene_voices'
 TASK_TYPE_GENERATE_SCENE_COMICS = 'generate_scene_comics'
 
 TASK_TYPE_EXTRACT_SCENE = 'extract_scene'
+# --- sync import/export -------------------------------------------------------------------
+# What an import is willing to unpack. This is a zip-bomb guard, so it wants to be finite --
+# but it also has to clear the real payload: the book this sync exists to move measures
+# 0.956 GiB across 642 files, which was 95.6% of the old hardcoded 1 GiB. A guard that fires
+# on the thing it was written to carry is not protection, it is an outage with a good excuse.
+SYNC_MAX_EXTRACT_BYTES = int(os.getenv("SYNC_MAX_EXTRACT_BYTES", str(8 * 1024 ** 3)))
+# Room to leave on the volume after unpacking, so an import cannot fill the disk out from
+# under the running instance.
+SYNC_MIN_FREE_BYTES_AFTER = int(os.getenv("SYNC_MIN_FREE_BYTES_AFTER", str(512 * 1024 ** 2)))
+
 TASK_TYPE_SYNC_EXPORT = 'sync_export'
 TASK_TYPE_SYNC_IMPORT = 'sync_import'
 TASK_TYPE_LETTER_ACTION = 'letter_action'
