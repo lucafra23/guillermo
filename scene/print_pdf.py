@@ -146,6 +146,11 @@ def build_pdf(pages, out_path, trim=DEFAULT_TRIM, per_page=2, margin=MARGIN_MM,
         raise PrintLayoutError("No pages to print.")
 
     layout = fit(trim, plate_aspect(pages[0][2]), per_page, margin, gutter)
+    # Take per_page BACK from the layout. fit() clamps it, and using the raw argument here meant
+    # a caller passing 5 got a layout sized for 2 and a row computed for 5 -- panels drawn off
+    # the left edge -- while 0 raised from range() and -1 produced a document with no panels in
+    # it and no complaint. The clamped value is the only one both halves agree on.
+    per_page = layout["per_page"]
     pw, ph = layout["trim_w"] * MM, layout["trim_h"] * MM
     c = canvas.Canvas(out_path, pagesize=(pw, ph))
     # Compression is ON for anything real. It is switchable only because an uncompressed file

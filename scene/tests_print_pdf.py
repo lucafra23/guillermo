@@ -260,3 +260,32 @@ class ReencodeTests(SimpleTestCase):
     def test_an_unreadable_plate_falls_back_instead_of_dropping_the_page(self):
         from scene.print_pdf import _maybe_recompress
         self.assertEqual(_maybe_recompress("/nope/missing.png", 70), "/nope/missing.png")
+
+
+class PerPageClampTests(SimpleTestCase):
+    """build_pdf and fit() must agree about how many panels are on a sheet."""
+
+    def _pages(self, d, n=4):
+        return [(i, f"panel-{i}", _plate(os.path.join(d, f"p{i}.png"))) for i in range(n)]
+
+    def test_an_out_of_range_value_does_not_draw_off_the_page(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "book.pdf")
+            written, layout = build_pdf(self._pages(d, 4), out, per_page=5)
+            self.assertEqual(layout["per_page"], 2)
+            self.assertEqual(written, 2)          # 4 panels at the clamped 2-up
+            self.assertEqual(open(out, "rb").read(5), b"%PDF-")
+
+    def test_zero_does_not_raise_from_range(self):
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "book.pdf")
+            written, layout = build_pdf(self._pages(d, 3), out, per_page=0)
+            self.assertEqual(layout["per_page"], 1)
+            self.assertEqual(written, 3)
+
+    def test_a_negative_value_still_prints_every_panel(self):
+        """It used to report success with an empty document."""
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "book.pdf")
+            written, _ = build_pdf(self._pages(d, 3), out, per_page=-1)
+            self.assertEqual(written, 3)
