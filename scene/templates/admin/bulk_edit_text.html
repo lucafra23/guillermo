@@ -1,0 +1,58 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+
+{% block content %}
+<form method="post">
+  {% csrf_token %}
+  {% for obj in queryset %}
+    <input type="hidden" name="_selected_action" value="{{ obj.pk }}">
+  {% endfor %}
+  <input type="hidden" name="action" value="{{ action_name }}">
+  <input type="hidden" name="bulk_text_submit" value="1">
+
+  <p style="margin-bottom:1rem;">
+    {% blocktrans count counter=actions_to_edit|length %}
+      Editing the text on {{ counter }} panel, in reading order.
+    {% plural %}
+      Editing the text on {{ counter }} panels, in reading order.
+    {% endblocktrans %}
+    {% trans "Saving changes the words only; it does not re-letter. Run “Letter selected” afterwards to composite them onto the art." %}
+  </p>
+
+  <div style="display:flex; flex-direction:column; gap:1rem;">
+    {% for a in actions_to_edit %}
+      <div style="display:flex; gap:1rem; align-items:flex-start; padding:0.75rem;
+                  border:1px solid rgba(128,128,128,0.3); border-radius:6px;">
+        <div style="flex:0 0 200px;">
+          {% if a.image_comic %}
+            <img src="{{ a.image_comic.url }}" alt="{{ a }}" loading="lazy"
+                 style="width:100%; height:auto; border-radius:4px;">
+          {% elif a.image %}
+            <img src="{{ a.image.url }}" alt="{{ a }}" loading="lazy"
+                 style="width:100%; height:auto; border-radius:4px;">
+          {% else %}
+            <div style="aspect-ratio:3/4; display:flex; align-items:center; justify-content:center;
+                        border:1px dashed rgba(128,128,128,0.4); border-radius:4px; font-size:0.75rem;">
+              {% trans "no art yet" %}
+            </div>
+          {% endif %}
+        </div>
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:0.8rem; opacity:0.7; margin-bottom:0.35rem;">
+            {{ a.scene }} &middot; {{ a }}
+          </div>
+          <textarea name="text_{{ a.pk }}" rows="7"
+                    style="width:100%; font-family:ui-monospace,monospace; font-size:0.85rem;
+                           padding:0.5rem; border-radius:4px;">{{ a.text|default_if_none:"" }}</textarea>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div style="position:sticky; bottom:0; padding:1rem 0; margin-top:1rem;
+              background:var(--body-bg, #fff); border-top:1px solid rgba(128,128,128,0.3);">
+    <button type="submit" class="button default">{% trans "Save all" %}</button>
+    <a href="." style="margin-left:1rem;">{% trans "Cancel" %}</a>
+  </div>
+</form>
+{% endblock %}
