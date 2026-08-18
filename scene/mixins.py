@@ -341,9 +341,24 @@ class AdminActionsMixin:
         self.message_user(request, "Selected items have been cloned.")
 
     def _queue_generate_image(self, request, queryset):
+        # The cumulative cap is checked HERE, at the single point both generate actions pass
+        # through, rather than in each action. A guard placed on the callers is a guard that
+        # the next caller forgets; this one cannot be walked around by adding an action.
+        if self._refuse_over_spend_cap(request, queryset.count()):
+            return
         for obj in queryset:
             if Task.createTaskIfQueueEnabled( obj, settings.TASK_TYPE_GENERATE_IMAGE, owner=request.user) is None:
                 obj.generate_image(user=request.user)
+
+    def _refuse_over_spend_cap(self, request, n_pending):
+        """True when the budget says no. Tells the user why, in the same breath."""
+        from scene.spend import cap_block_reason
+
+        reason = cap_block_reason(n_pending)
+        if not reason:
+            return False
+        self.message_user(request, reason, level=messages.ERROR)
+        return True
 
     # Above this many generations in one action, confirm even when nothing would be overwritten.
     # The first version of this guard only asked when existing art was at risk, which made it an
@@ -500,6 +515,10 @@ class AdminActionsMixin:
 
     @admin.action(description="Refine image")
     def default_refine_image(self, request, queryset):
+        # Refine is the OTHER paid image path: it calls the same image agent and is billed the
+        # same way, so a cap that only covered `generate` would be a budget with a door in it.
+        if self._refuse_over_spend_cap(request, queryset.count()):
+            return
         for obj in queryset:
             if Task.createTaskIfQueueEnabled( obj, settings.TASK_TYPE_REFINE_IMAGE, owner=request.user) is None:
                 obj.refine_image(user=request.user) 

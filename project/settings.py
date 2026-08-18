@@ -427,6 +427,24 @@ try:
 except ValueError:
     IMAGE_GENERATION_COST = 0.0
 
+# A CUMULATIVE ceiling, in the same currency as IMAGE_GENERATION_COST. 0 disables it, which is
+# the default: a cap is a budget and this project cannot know yours. A per-batch confirmation
+# (see the generate actions) cannot see a habit -- ten confirmed batches of ten are a hundred
+# images nobody was asked about -- so this is the figure that survives being tired at 2am.
+# When set, it fails CLOSED: an unreadable ledger or an unpriced generation refuses the spend.
+try:
+    IMAGE_SPEND_CAP = float(os.getenv("IMAGE_SPEND_CAP", "0") or 0)
+except ValueError:
+    IMAGE_SPEND_CAP = 0.0
+
+# Images already generated when the cap was set, so the cap measures spending from that point.
+# Without it an instance with history is over its first budget the moment the budget is written.
+# `scene.spend.images_generated()` prints the current number to put here.
+try:
+    IMAGE_SPEND_BASELINE = int(os.getenv("IMAGE_SPEND_BASELINE", "0") or 0)
+except ValueError:
+    IMAGE_SPEND_BASELINE = 0
+
 
 
 TASK_TYPE_GENERATE_IMAGE = 'generate_image'
