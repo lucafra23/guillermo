@@ -1,5 +1,6 @@
 import yaml
 from django.contrib import admin, messages
+from django.template.response import TemplateResponse
 from django.utils.html import format_html
 from .schemas import AssetsSchema, BackgroundSchema, CharacterSchema, PropSchema, VoiceSchema
 from django.utils.translation import gettext_lazy as _
@@ -339,12 +340,163 @@ class AdminActionsMixin:
                 obj.cast.set(cast)
         self.message_user(request, "Selected items have been cloned.")
 
-    @admin.action(description="Generate image")
-    def default_generate_image(self, request, queryset):
+    def _queue_generate_image(self, request, queryset):
         for obj in queryset:
             if Task.createTaskIfQueueEnabled( obj, settings.TASK_TYPE_GENERATE_IMAGE, owner=request.user) is None:
                 obj.generate_image(user=request.user)
-            self.message_user(request, "Image generated for item ID {}.".format(obj.id))
+
+    # Above this many generations in one action, confirm even when nothing would be overwritten.
+    # The first version of this guard only asked when existing art was at risk, which made it an
+    # OVERWRITE guard wearing a spend guard's name: selecting 500 image-less rows spent ~$75
+    # without a single prompt. Losing money you did not mean to spend does not require the rows to
+    # have been filled in already.
+    CONFIRM_GENERATE_OVER = 10
+
+    @staticmethod
+    def _spend_estimate(count):
+        """A money figure, when the deployment has told us what a generation costs.
+
+        Deliberately absent rather than guessed when unset: a wrong number on a confirmation
+        screen is worse than no number, because people act on it. Absent too when the configured
+        rate is unusable - settings can be overridden per deployment, and a rate that arrives as a
+        string formats with :.2f by raising. Raising HERE would be merely ugly; it used to raise
+        AFTER the batch was queued, so the operator saw a 500 with the money already spent.
+        """
+        raw = getattr(settings, "IMAGE_GENERATION_COST", None)
+        if raw is None:
+            return ""
+        try:
+            rate = float(raw)
+        except (TypeError, ValueError):
+            return ""
+        if rate <= 0:
+            return ""
+        return f" (about ${rate * count:.2f})"
+
+    @classmethod
+    def _needs_generate_confirmation(cls, n_overwrite, total):
+        """Confirm when existing art would be destroyed OR when the batch is simply large.
+
+        Both are ways to lose something you cannot get back. Kept as a named predicate
+        rather than inline so it can be tested directly: a test that restates the
+        condition tests the restatement, not the guard.
+        """
+        return bool(n_overwrite) or total > cls.CONFIRM_GENERATE_OVER
+
+    CONFIRM_NONCE_KEY = "_generate_confirm_nonces"
+
+    def _confirmation_token(self, request, pks):
+        """A ONE-SHOT token over this exact batch, so a confirmation cannot be replayed.
+
+        Without it, a confirmed POST is an ordinary form submission: a browser refresh, a
+        "resend", or a replayed payload fires the whole batch again with no prompt.
+
+        A signature ALONE is not enough, and it is worth being precise about why: a signature is
+        stateless, so it verifies every time it is presented. It proves "this batch was offered to
+        this user", never "and has not been acted on". The one-shot property has to come from
+        server state, so the signed payload carries a nonce that is spent from the session on use.
+        """
+        from django.core import signing
+
+        nonce = secrets.token_urlsafe(16)
+        pending = request.session.get(self.CONFIRM_NONCE_KEY, [])
+        pending = (pending + [nonce])[-20:]      # bounded: a session must not grow without limit
+        request.session[self.CONFIRM_NONCE_KEY] = pending
+        request.session.modified = True
+        return signing.dumps(
+            {"pks": sorted(str(p) for p in pks), "user": request.user.pk, "nonce": nonce},
+            salt="scene.generate.confirm")
+
+    def _confirmation_is_valid(self, request, pks):
+        """True exactly once per issued token, and only for the batch it was issued for."""
+        from django.core import signing
+
+        token = request.POST.get("confirm_token") or ""
+        try:
+            data = signing.loads(token, salt="scene.generate.confirm", max_age=600)
+        except signing.BadSignature:
+            return False
+        if data.get("user") != request.user.pk:
+            return False
+        if data.get("pks") != sorted(str(p) for p in pks):
+            return False
+        pending = request.session.get(self.CONFIRM_NONCE_KEY, [])
+        if data.get("nonce") not in pending:
+            return False                          # already spent, or issued to another session
+        pending.remove(data["nonce"])
+        request.session[self.CONFIRM_NONCE_KEY] = pending
+        request.session.modified = True
+        return True
+
+    @admin.action(description="Generate image (only the missing ones)")
+    def generate_missing_images(self, request, queryset):
+        """Generate only for rows that have no image yet.
+
+        The common case this exists for: a 40-panel scene where 3 panels need art. Selecting the
+        scene and hitting "Generate image" spends on all 40 AND replaces 37 approved plates, with
+        no undo.
+        """
+        missing = queryset.filter(image__isnull=True)
+        count = missing.count()
+        skipped = queryset.count() - count
+        if not count:
+            self.message_user(
+                request, f"Nothing to do: all {skipped} selected item(s) already have an image.",
+                level=messages.INFO)
+            return
+        self._queue_generate_image(request, missing)
+        self.message_user(
+            request,
+            f"Queued {count} image(s){self._spend_estimate(count)}. "
+            f"Left {skipped} existing image(s) untouched.",
+            level=messages.SUCCESS)
+
+    @admin.action(description="Generate image")
+    def default_generate_image(self, request, queryset):
+        """Generate for every selected row, confirming first if that would destroy existing art.
+
+        `generate_image` overwrites in place and the previous filer row is not reachable from the
+        admin afterwards, so an accidental bulk generate is unrecoverable work as well as
+        unrecoverable money. The interstitial only appears when something would actually be
+        overwritten, so the ordinary "generate a fresh batch" path is unchanged.
+        """
+        overwrite = queryset.filter(image__isnull=False)
+        n_overwrite = overwrite.count()
+        total = queryset.count()
+        pks = list(queryset.values_list("pk", flat=True))
+
+        needs_confirmation = self._needs_generate_confirmation(n_overwrite, total)
+        if needs_confirmation and not self._confirmation_is_valid(request, pks):
+            if request.POST.get("confirm_overwrite") == "yes":
+                # A confirmation was offered but its token was missing, altered, expired, or was
+                # issued for a different selection: a replay. Re-ask rather than spend.
+                self.message_user(
+                    request,
+                    "That confirmation could not be used again. Check the batch and confirm it "
+                    "once more.",
+                    level=messages.WARNING)
+            return TemplateResponse(request, "admin/confirm_generate_overwrite.html", {
+                **self.admin_site.each_context(request),
+                "title": "Overwrite existing images?" if n_overwrite else "Generate images?",
+                "queryset": queryset,
+                "overwrite": overwrite,
+                "n_overwrite": n_overwrite,
+                "n_total": total,
+                "spend_total": self._spend_estimate(total),
+                "confirm_token": self._confirmation_token(request, pks),
+                "action_name": "default_generate_image",
+                "opts": self.model._meta,
+                "media": self.media,
+            })
+        # Compute the money figure BEFORE spending: if the configured rate is unusable this must
+        # not be the line that raises, with the batch already queued behind it.
+        estimate = self._spend_estimate(total)
+        self._queue_generate_image(request, queryset)
+        self.message_user(
+            request,
+            f"Queued {total} image(s){estimate}"
+            + (f", replacing {n_overwrite} existing image(s)." if n_overwrite else "."),
+            level=messages.SUCCESS)
 
     @admin.action(description="Refine image")
     def default_refine_image(self, request, queryset):
