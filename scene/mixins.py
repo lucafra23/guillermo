@@ -537,6 +537,45 @@ class AdminActionsMixin:
                 obj.refine_image(user=request.user) 
             self.message_user(request, "Image generated for item ID {}.".format(obj.id))
 
+    @admin.action(description="Suggest balloon placement (only where missing)")
+    def suggest_placement(self, request, queryset):
+        """Fill in a box for every lettering element that has none. Free, and never re-renders.
+
+        Only elements WITHOUT a box are touched, so a placement someone has already chosen by hand
+        is never second-guessed. Nothing is composited: the boxes land in `Action.lettering` and
+        the panel is re-lettered when the author asks for it, so a suggestion can be reviewed and
+        overridden before it appears on the page.
+        """
+        from .autoplace import suggest_for_action
+
+        total_placed = total_failed = skipped = 0
+        for obj in queryset:
+            if not obj.image or not obj.lettering:
+                skipped += 1
+                continue
+            try:
+                elements, placed, failed = suggest_for_action(obj, only_missing=True)
+            except Exception as e:
+                self.message_user(request, f"{obj}: {type(e).__name__}: {e}", level=messages.ERROR)
+                continue
+            if placed:
+                obj.lettering = elements
+                obj.save(update_fields=["lettering"])
+            total_placed += placed
+            total_failed += failed
+            if failed:
+                self.message_user(
+                    request,
+                    f"{obj}: {failed} element(s) could not be placed - usually text too long for "
+                    f"the width, or no free space that avoids the art. Place those by hand.",
+                    level=messages.WARNING)
+        self.message_user(
+            request,
+            f"Placed {total_placed} element(s); {total_failed} needed a human; "
+            f"{skipped} panel(s) had no art or no lettering to place. "
+            f"Nothing was composited - re-letter when you are happy with the boxes.",
+            level=messages.SUCCESS)
+
     @admin.action(description="Refined as image")
     def accept_refined_image(self, request, queryset):
         for obj in queryset:
