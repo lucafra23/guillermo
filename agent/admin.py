@@ -169,7 +169,10 @@ class GoogleApiKeyAdmin(ModelAdmin):
         if request.user.is_superuser:
             return qs
         # Users only see themselves
-        return qs.filter(id=request.user.id)
+        # user=, not id=: this compares the ROW's pk to the user's pk, which only
+        # coincides while profile ids happen to track user ids. Once they diverge
+        # it hides a user's own row, or shows them someone else's.
+        return qs.filter(user=request.user)
 
     def get_fieldsets(self, request, obj=None):
         if obj:  # Editing an existing object
@@ -204,7 +207,10 @@ class AgentProfileAdmin(ModelAdmin):
         if request.user.is_superuser:
             return qs
         # Users only see themselves
-        return qs.filter(id=request.user.id)
+        # user=, not id=: this compares the ROW's pk to the user's pk, which only
+        # coincides while profile ids happen to track user ids. Once they diverge
+        # it hides a user's own row, or shows them someone else's.
+        return qs.filter(user=request.user)
 
     def has_change_permission(self, request, obj=None):
         if not obj:

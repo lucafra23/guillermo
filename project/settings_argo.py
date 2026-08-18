@@ -123,7 +123,7 @@ WSGI_APPLICATION = 'project.wsgi.application'
 
 def agentprofile(request):
     try:
-        return f"/admin/agent/agentprofile/{request.user.story_profile.id}/change/?next=/admin/scene/story/"
+        return f"/admin/agent/agentprofile/{request.user.agent_profile.id}/change/?next=/admin/scene/story/"
     except:
         return "/admin/"
     

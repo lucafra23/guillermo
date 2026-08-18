@@ -427,7 +427,11 @@ class Scene(AfterSaveActionMixin, YAMLAssetsMixin, models.Model, TaskHolder, Get
     def get_contents(self, generate_self=True, preset=None):
         parts = []
         if not generate_self:
-            parts.extend(self.story.style.get_contents(generate_self=False))
+            # Guarded the way Character, Background and Prop already guard the same access:
+            # a Story is created before its Style is chosen, so a brand-new story crashed
+            # generation here with AttributeError on None.
+            if self.story and self.story.style:
+                parts.extend(self.story.style.get_contents(generate_self=False))
         else:
             # deprecated
             if preset == self.PRESET_REFINE_PROMPT:
@@ -579,7 +583,10 @@ class Nudge(models.Model, EmailSenderMixin):
         if not self.id:
             author = Author.objects.filter(story=self.story, user=self.receiver).first()
             if author:
-                cta_url = settings.SITE_URL + f'/admin/scene/scene/add?story={self.story.id}&author={author.id}'
+                # Same as the invitation: SITE_URL is None when unset, and concatenating it
+                # raised TypeError instead of sending a nudge with a relative link.
+                cta_url = (f"{(settings.SITE_URL or '').rstrip('/')}"
+                           f"/admin/scene/scene/add?story={self.story.id}&author={author.id}")
                 send = True
         super().save(*args, **kwargs)
         if send:
