@@ -237,20 +237,63 @@ class GetContentsMixin:
             raise ValueError(f"No agent configured for name: {name}")   
         return agent
 
+    def set_image_keeping_previous(self, new_image, save=True):
+        """Point `image` at a new plate, remembering the one it replaces.
+
+        `generate_image` used to be assign-and-save, so the plate it replaced became an orphaned
+        filer row unreachable from the admin: a misfired click on approved art was unrecoverable
+        except by digging through filer by filename. One step of history is enough to undo that,
+        and cheap.
+
+        Nothing is remembered when the generation produced nothing (a rate-limited call returns
+        None, and losing the good plate to a failed call would be the very thing this prevents),
+        nor when the "new" plate is the row already in place.
+        """
+        previous = self.image
+        if not new_image:
+            return self.image
+        if previous and previous.pk != new_image.pk and hasattr(self, "previous_image"):
+            self.previous_image = previous
+        self.image = new_image
+        if save:
+            self.save()
+        return self.image
+
+    def revert_image(self):
+        """Swap `image` and `previous_image`. Returns True when there was something to revert.
+
+        A swap rather than a restore, so revert is itself undoable - pressing it twice returns
+        you to where you started, which is what someone who clicked it by mistake needs.
+        """
+        if not getattr(self, "previous_image", None):
+            return False
+        self.image, self.previous_image = self.previous_image, self.image
+        self.save()
+        return True
+
     def generate_image(self, user=None):
         agent = self.get_agent(Agent.OUTPUT_TYPE_IMAGE)
-        self.image = agent.generate(self, preset=self.PRESET_IMAGE, user=user, target_field="image")
-        self.save()
-        return self.image
+        out = agent.generate(self, preset=self.PRESET_IMAGE, user=user, target_field="image")
+        if not out:
+            # The call produced nothing (rate limit, refusal). Leave the existing plate alone
+            # rather than blanking it.
+            return self.image
+        return self.set_image_keeping_previous(out)
     
     def refine_image(self, save=True, user=None):
+        """Replace the plate with a refined one, keeping the plate it replaces.
+
+        This is a PAID generation that writes to `image`, and it used to assign directly. That
+        made "Revert to previous plate" a lie on one of the two paid paths: refine and revert sit
+        next to each other in the same admin action list, so the presence of revert implies refine
+        is covered by it. It was not - a refine destroyed the approved plate with no way back.
+        """
         image_agent = self.get_agent(Agent.OUTPUT_TYPE_IMAGE)
         out = image_agent.generate(self, preset=self.PRESET_REFINE, user=user, target_field="image")
         if save and out:
-            self.image = out
-            self.save()
+            return self.set_image_keeping_previous(out)
         return out
-    
+
     def generate_video(self, preset, user=None):
         agent = self.get_agent(Agent.OUTPUT_TYPE_VIDEO)
         self.video = agent.generate(self, preset=preset, user=user, target_field="video")
@@ -275,14 +318,9 @@ class GetContentsMixin:
         out = agent.generate(self, preset=preset, user=user, target_field="scene")
         return out
 
-    def refine_image(self, save=True, user=None):
-        image_agent = self.get_agent(Agent.OUTPUT_TYPE_IMAGE)
-        out = image_agent.generate(self, preset=self.PRESET_REFINE, user=user, target_field="image")
-        if save and out:
-            self.image = out
-            self.save()
-        return out
-    
+    # (A second, identical `refine_image` used to sit here. Python kept only the later definition,
+    # so the earlier one was dead and any fix applied to it would have had no effect at all.)
+
     def generate_text(self, preset=PRESET_REFINE_PROMPT, message=None, instructions=[], target_field="prompt", schema=None, agent=None, user=None):
         if agent is None:
             agent = self.get_agent(Agent.OUTPUT_TYPE_TEXT)

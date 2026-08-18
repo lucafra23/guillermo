@@ -527,9 +527,26 @@ class AdminActionsMixin:
     @admin.action(description="Refined as image")
     def accept_refined_image(self, request, queryset):
         for obj in queryset:
-            obj.image=obj.image_refine
-            obj.save()
+            # Accepting a refinement replaces the approved plate just as a generation does, so it
+            # goes through the same one-step history.
+            obj.set_image_keeping_previous(obj.image_refine)
             self.message_user(request, "image accepted for item ID {}.".format(obj.id))
+
+    @admin.action(description="Revert to previous plate")
+    def revert_to_previous_image(self, request, queryset):
+        """Undo the last image replacement on the selected rows."""
+        reverted = [obj for obj in queryset if obj.revert_image()]
+        if reverted:
+            self.message_user(
+                request,
+                f"Reverted {len(reverted)} item(s) to the previous plate. "
+                f"Running this again puts them back.",
+                level=messages.SUCCESS)
+        skipped = queryset.count() - len(reverted)
+        if skipped:
+            self.message_user(
+                request, f"{skipped} item(s) had no previous plate to revert to.",
+                level=messages.WARNING)
 
     @admin.action(description="Refined as first frame")
     def accept_refined_first(self, request, queryset):
