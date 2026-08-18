@@ -139,20 +139,42 @@ class ActionRefWidget(widgets.ForeignKeyWidget):
     def __init__(self, **kwargs):
         super().__init__(Action, field='id', **kwargs)
 
+    # Rendered as "<scene name>::<panel name>", which is the SAME key Meta.import_id_fields
+    # uses. It used to be "<scene.order>:<panel.order>", and that key does not identify a
+    # panel: measured on this book, 604 panels produce only 530 distinct (scene.order,
+    # order) pairs -- 61 keys shared by 135 panels -- so `.first()` picked an arbitrary one
+    # of them. 187 panels carry a consistent_with reference, and a mislinked one is silent:
+    # the import reports success and the panel is simply drawn against the wrong character.
+    # The same names give 604 distinct keys, zero collisions.
+    SEP = "::"
+
     def render(self, value, obj=None):
         if not value:
             return ""
-        return f"{value.scene.order}:{value.order}"
+        scene = getattr(value, "scene", None)
+        return f"{getattr(scene, 'name', '')}{self.SEP}{value.name or ''}"
 
     def clean(self, value, row=None, **kwargs):
-        if not value or ':' not in str(value):
+        if not value:
             return None
-        scene_order, action_order = str(value).split(':', 1)
+        value = str(value)
         story_name = (row or {}).get('story')
         qs = Action.objects.all()
         if story_name:
             qs = qs.filter(scene__story__name=story_name)
-        return qs.filter(scene__order=scene_order, order=action_order).first()
+
+        if self.SEP in value:
+            # rsplit: a scene name may contain a single colon, and splitting from the left
+            # would hand the tail of the scene name to the panel lookup.
+            scene_name, action_name = value.rsplit(self.SEP, 1)
+            return qs.filter(scene__name=scene_name.strip(), name=action_name.strip()).first()
+
+        # Legacy "<scene.order>:<panel.order>" from a zip exported before this change. Kept
+        # so an older archive still imports, ambiguity and all -- that is what it recorded.
+        if ':' in value:
+            scene_order, action_order = value.split(':', 1)
+            return qs.filter(scene__order=scene_order, order=action_order).first()
+        return None
 
 
 class StoryResource(resources.ModelResource):

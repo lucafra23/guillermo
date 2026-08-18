@@ -7,10 +7,12 @@ from scene.models import Action
 from django.utils.text import slugify
 from django.conf import settings
 from django.core import serializers
+from django.core.files import File
 from django.core.files.base import ContentFile
 from django.db import transaction
 import io
 import os
+import shutil
 import zipfile
 import tempfile
 
@@ -31,8 +33,14 @@ class TaskSyncExport:
         story = sync.story
         from filer.models.filemodels import File as FilerFile
 
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        # Built on disk, not in memory. This book's payload measures 0.956 GiB across 642
+        # files, and io.BytesIO held all of it, then `buffer.read()` copied it again for
+        # ContentFile -- two full copies resident at once, on a worker that also has the
+        # image pipeline in it. A NamedTemporaryFile costs a file handle instead.
+        tmp = tempfile.NamedTemporaryFile(suffix='.zip', delete=False)
+        tmp_path = tmp.name
+        skipped_media = []
+        with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             # 1. Export Data as CSVs
             zip_file.writestr('data/story.csv', StoryResource().export(story.__class__.objects.filter(id=story.id)).csv)
             zip_file.writestr('data/characters.csv', CharacterResource().export(story.characters.all()).csv)
@@ -49,14 +57,20 @@ class TaskSyncExport:
 
             # 2. Helper to add media files
             def add_filer_file(filer_file, folder):
+                # A file that cannot be added is RECORDED, never swallowed. A silent `pass`
+                # here ships a book with holes in it and reports success: the zip is well
+                # formed, the CSV still references the image, and the gap only surfaces on
+                # the far side, after the import, as a panel with no art.
                 if filer_file and hasattr(filer_file, 'file') and filer_file.file:
                     try:
                         file_path = filer_file.file.path
                         arcname = os.path.join(folder, os.path.basename(file_path))
                         if arcname not in zip_file.namelist():
                             zip_file.write(file_path, arcname)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        skipped_media.append(
+                            f"{getattr(filer_file, 'original_filename', filer_file)}: "
+                            f"{type(e).__name__}: {e}")
 
             for char in story.characters.all():
                 add_filer_file(char.image, "media/characters")
@@ -74,14 +88,27 @@ class TaskSyncExport:
                 add_filer_file(action.video, "media/videos")
                 add_filer_file(action.audio_voice, "media/audio")
 
-        buffer.seek(0)
         filename = f"export_{slugify(story.name)}_{sync_item.id}.zip"
-        
-        out_file = FilerFile.objects.create(
-            original_filename=filename,
-            file=ContentFile(buffer.read(), name=filename),
-            name=filename
-        )
+
+        try:
+            size = os.path.getsize(tmp_path)
+            with open(tmp_path, 'rb') as fh:
+                out_file = FilerFile.objects.create(
+                    original_filename=filename,
+                    file=File(fh, name=filename),
+                    name=filename
+                )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        self.task.log(f"Exported {filename} ({size / 1e6:.0f} MB compressed).")
+        if skipped_media:
+            self.task.log(
+                f"{len(skipped_media)} media file(s) could NOT be added and are missing from "
+                f"the export; the CSVs still reference them:\n  " + "\n  ".join(skipped_media[:20]))
         sync_item.zip_file = out_file
         sync_item.save()
         
@@ -90,7 +117,16 @@ class TaskSyncExport:
 
 class TaskSyncImport:
     # Extraction guard against zip bombs.
-    MAX_EXTRACT_BYTES = 1024 * 1024 * 1024  # 1 GiB
+    #
+    # 1 GiB was not headroom, it was a deadline: the book this sync exists to move measures
+    # 0.956 GiB today (642 files), i.e. 95.6% of the old cap, so roughly one more movement's
+    # worth of art would have started failing the import with "archive exceeds size cap" --
+    # a guard firing on the payload it was written to carry. Env-driven now, with a default
+    # that leaves actual room, and paired with a free-space check, which is the resource a
+    # runaway extraction really exhausts.
+    MAX_EXTRACT_BYTES = int(getattr(settings, 'SYNC_MAX_EXTRACT_BYTES', 0) or 8 * 1024 ** 3)
+    # Leave the volume usable after unpacking, rather than filling it to the last byte.
+    MIN_FREE_BYTES_AFTER = int(getattr(settings, 'SYNC_MIN_FREE_BYTES_AFTER', 0) or 512 * 1024 ** 2)
 
     def __init__(self, task):
         self.task = task
@@ -106,7 +142,19 @@ class TaskSyncImport:
                 raise SyncImportError(f"Unsafe path in zip: {info.filename}")
             total += info.file_size
             if total > self.MAX_EXTRACT_BYTES:
-                raise SyncImportError("Refusing to extract: archive exceeds size cap")
+                raise SyncImportError(
+                    f"Refusing to extract: archive exceeds size cap of "
+                    f"{self.MAX_EXTRACT_BYTES / 1024 ** 3:.2f} GiB. Raise "
+                    f"SYNC_MAX_EXTRACT_BYTES if this book is genuinely that large.")
+
+        # The cap bounds what we are WILLING to write; this bounds what the disk can take.
+        # Filling the volume out from under a running instance is the more likely accident
+        # of the two, and it takes the whole app down rather than just this import.
+        free = shutil.disk_usage(dest_real).free
+        if total > free - self.MIN_FREE_BYTES_AFTER:
+            raise SyncImportError(
+                f"Refusing to extract: {total / 1024 ** 3:.2f} GiB to unpack, "
+                f"{free / 1024 ** 3:.2f} GiB free on the destination volume.")
         zf.extractall(dest)
 
     def _backup_story(self, story_name):
@@ -255,7 +303,10 @@ class TaskSyncImport:
             qs = Action.objects.all()
             if story_name:
                 qs = qs.filter(scene__story__name=story_name)
-            panel = qs.filter(scene__order=row.get('scene'), order=row.get('order')).first()
+            # Locate the panel the same way the reference is resolved: by (scene, name),
+            # the key import_id_fields uses. Keying this on (scene__order, order) meant the
+            # link could be written onto a different panel than the row describes.
+            panel = qs.filter(scene__name=row.get('scene'), name=row.get('name')).first()
             if panel and panel.consistent_with_id != target.id:
                 panel.consistent_with = target
                 panel.save(update_fields=['consistent_with'])
