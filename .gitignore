@@ -205,7 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-media/
+# 'media/' matches a directory only. A SYMLINK named 'media' is not a directory, so a link
+# pointing somewhere outside the checkout can still be committed as a 120000 blob, landing
+# a dangling path exactly where MEDIA_ROOT points. '/media' matches both, at the repo root.
+/media
 catalog/
 db.sqlite3
 
