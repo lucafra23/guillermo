@@ -415,6 +415,11 @@ GENAI_REQUEST_TIMEOUT_MS = int(os.getenv("GENAI_REQUEST_TIMEOUT_MS", "300000"))
 
 
 
+# How much character context a COMIC generation carries: "off", "text", or "text+image".
+# Off by default on purpose -- switching it on changes the prompt sent to a paid model for every
+# comic panel, and an existing book was drawn against the current one. See scene/character_locks.py.
+COMIC_CHARACTER_CONTEXT = os.getenv("COMIC_CHARACTER_CONTEXT", "off")
+
 TASK_TYPE_GENERATE_IMAGE = 'generate_image'
 TASK_TYPE_REFINE_IMAGE = 'refine_image'
 TASK_TYPE_GENERATE_VIDEO = 'generate_video'
