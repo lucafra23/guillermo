@@ -35,7 +35,17 @@ SITE_URL = os.getenv("SITE_URL")
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Off unless DJANGO_DEBUG is set, so an instance that is merely deployed without
+# thinking about it is not a debug instance. Local development wants
+# DJANGO_DEBUG=1 in .env.
+DEBUG = os.getenv("DJANGO_DEBUG", "").lower() in ("1", "true", "yes", "on")
+
+# With DEBUG off, django.conf.urls.static.static() returns an empty list and every
+# uploaded image 404s, so project/urls.py serves MEDIA_ROOT / STATIC_ROOT itself.
+# Django's static serve view is fine for a single-instance deployment and wrong for
+# a busy one -- put the files behind nginx or a bucket and set these to 0.
+SERVE_MEDIA = os.getenv("SERVE_MEDIA", "1").lower() in ("1", "true", "yes", "on")
+SERVE_STATIC = os.getenv("SERVE_STATIC", "1").lower() in ("1", "true", "yes", "on")
 
 # ALLOWED_HOSTS = ['178.238.234.86', 'localhost', '127.0.0.1']
 ALLOWED_HOSTS = ['178.238.234.86', 'guillermoai.duckdns.org', 'www.guillermoai.duckdns.org', 'guillermo.studio', 'localhost', '127.0.0.1']
