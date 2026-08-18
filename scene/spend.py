@@ -28,13 +28,22 @@ def _conf(name, default):
 def images_generated():
     """Paid image generations recorded in the ledger, or None if that cannot be read.
 
+    Includes rows whose agent has since been deleted: see the comment below on why those are
+    counted rather than skipped.
+
     TokenUsage is written by Agent.save_usage on every returned generation, so counting its
     image rows counts generations that actually completed -- which is what was billed. A
     refusal that never produced a response writes no row and is not counted, correctly.
     """
     try:
         from agent.models import Agent, TokenUsage
-        return TokenUsage.objects.filter(agent__output_type=Agent.OUTPUT_TYPE_IMAGE).count()
+        images = TokenUsage.objects.filter(agent__output_type=Agent.OUTPUT_TYPE_IMAGE).count()
+        # TokenUsage.agent is SET_NULL, so deleting an Agent detaches its history and the type
+        # of those rows becomes unknowable. Counting them keeps the cap conservative: for a
+        # guard on money, over-reading the past and refusing early is the safe direction, and
+        # the baseline setting is how an operator moves past history they have accepted.
+        orphans = TokenUsage.objects.filter(agent__isnull=True).count()
+        return images + orphans
     except Exception:
         # Never re-raised: this runs on the path that spends money, and an exception here
         # must not become the reason a generation proceeds unchecked.

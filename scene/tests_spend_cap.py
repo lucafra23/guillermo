@@ -202,3 +202,20 @@ class QueuedWorkTests(TestCase):
     def test_an_unreadable_task_table_fails_closed(self):
         with mock.patch("task.models.Task.objects.filter", side_effect=RuntimeError("boom")):
             self.assertIn("could not be read", cap_block_reason(1))
+
+
+class OrphanedLedgerTests(TestCase):
+    """TokenUsage.agent is SET_NULL: deleting an Agent must not hide what it spent."""
+
+    @override_settings(IMAGE_GENERATION_COST=0.10, IMAGE_SPEND_CAP=1.0)
+    def test_history_survives_deleting_the_agent_that_made_it(self):
+        from agent.models import Agent, AgentModel, TokenUsage
+        model = AgentModel.objects.create(name="m")
+        agent = Agent.objects.create(name="artist", agent_model=model,
+                                     output_type=Agent.OUTPUT_TYPE_IMAGE)
+        TokenUsage.objects.bulk_create([TokenUsage(agent=agent, tokens=1) for _ in range(12)])
+        self.assertIsNotNone(cap_block_reason(1))       # $1.20 against a $1.00 cap
+        agent.delete()
+        self.assertEqual(TokenUsage.objects.filter(agent__isnull=True).count(), 12)
+        self.assertIsNotNone(cap_block_reason(1),
+                             "deleting the agent hid the spend and re-opened the budget")
