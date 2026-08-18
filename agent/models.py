@@ -578,10 +578,15 @@ class Agent(models.Model):
            
         )
         with self.get_genai_client(user) as client:
-            response = client.models.generate_content(
-                model=self.agent_model.name,
-                contents=contents,
-                config=config
+            # ONLY the transport call is retried. Everything below this line runs against a
+            # response that has already been paid for, and repeating it would pay again.
+            response = call_with_retry(
+                lambda: client.models.generate_content(
+                    model=self.agent_model.name,
+                    contents=contents,
+                    config=config
+                ),
+                description=f"{self.name} (image) for {prompt_obj}",
             )
             self.save_usage(user, response, obj=prompt_obj, preset=preset)
             out = self.save_image(response, prompt_obj)
@@ -590,20 +595,22 @@ class Agent(models.Model):
 
     def generate_image_omni_video(self, preset, prompt_obj,message=None, user=None, contents=None):
         with self.get_genai_client(user) as client:
-            interaction = client.interactions.create(
-                model="gemini-omni-flash-preview",
-                input=[
-                     {
-                        "type": "image", 
-                        "data": contents["image"], 
-                        "mime_type": "image/png" # Use image/jpeg if using a .jpg file
-                    },
-                    {
-                        "type": "text", 
-                        "text": contents["prompt"]
-                    }
-                    ]
-                    
+            interaction = call_with_retry(
+                lambda: client.interactions.create(
+                    model="gemini-omni-flash-preview",
+                    input=[
+                         {
+                            "type": "image", 
+                            "data": contents["image"], 
+                            "mime_type": "image/png" # Use image/jpeg if using a .jpg file
+                        },
+                        {
+                            "type": "text", 
+                            "text": contents["prompt"]
+                        }
+                        ]
+                ),
+                description=f"{self.name} (omni video) for {prompt_obj}",
             )
             if interaction.output_video and interaction.output_video.data:
                 name = f"video_{slugify(prompt_obj.__class__.__name__)}_{slugify(prompt_obj.name)}_{slugify(self.name)}_{random.randint(1000,9999)}.mp4"
@@ -633,19 +640,25 @@ class Agent(models.Model):
         if contents is None:
             contents = prompt_obj.get_contents(generate_self=True, preset=preset)
         if preset == GetContentsMixin.PRESET_VIDEO:
-            operation = client.models.generate_videos(
-                model=self.agent_model.name,
-                prompt=contents['prompt'],
-                image=contents['image'] if 'image' in contents else None
+            operation = call_with_retry(
+                lambda: client.models.generate_videos(
+                    model=self.agent_model.name,
+                    prompt=contents['prompt'],
+                    image=contents['image'] if 'image' in contents else None
+                ),
+                description=f"{self.name} (video) for {prompt_obj}",
             )
         elif preset == GetContentsMixin.PRESET_VIDEO_FIRST_LAST:
-            operation = client.models.generate_videos(
-                model=self.agent_model.name,
-                prompt=contents['prompt'],
-                image=contents['image_first'] if 'image_first' in contents else None,
-                config=types.GenerateVideosConfig(
-                    last_frame=contents['image_last'] if 'image_last' in contents else None
+            operation = call_with_retry(
+                lambda: client.models.generate_videos(
+                    model=self.agent_model.name,
+                    prompt=contents['prompt'],
+                    image=contents['image_first'] if 'image_first' in contents else None,
+                    config=types.GenerateVideosConfig(
+                        last_frame=contents['image_last'] if 'image_last' in contents else None
+                    ),
                 ),
+                description=f"{self.name} (video first/last) for {prompt_obj}",
             )
         # Poll the operation status until the video is ready.
         while not operation.done:
@@ -724,7 +737,12 @@ class Agent(models.Model):
             args["config"] = config
         
         with self.get_genai_client(user) as client:
-            response = client.models.generate_content(**args)
+            # ONLY the transport call is retried. Everything below this line runs against a
+            # response that has already been paid for, and repeating it would pay again.
+            response = call_with_retry(
+                lambda: client.models.generate_content(**args),
+                description=f"{self.name} (text) for {prompt_obj}",
+            )
             self.save_usage(user, response, obj=prompt_obj, preset=preset)
             if schema is not None:
                 data = schema_class.model_validate_json(response.text)
