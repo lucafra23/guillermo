@@ -36,6 +36,7 @@ that does not change this render until "Refresh Render" runs again.
 import base64
 import html
 import io
+import os
 import traceback
 
 from django.core.files.base import ContentFile
@@ -298,12 +299,17 @@ def _discard_document(filer_file):
         pass
 
 
-def _attach(render, filename, text):
-    """Write the document, point the Render at it, and retire the one it replaces."""
+def _attach(render, filename, text, binary=False):
+    """Write the document, point the Render at it, and retire the one it replaces.
+
+    `binary` because the print lane hands over PDF bytes rather than markup: encoding those as
+    UTF-8 does not raise, it corrupts, and the failure only shows up when someone opens the file.
+    """
     previous = render.document
+    payload = text if binary else text.encode("utf-8")
     out = FilerFile.objects.create(
         original_filename=filename,
-        file=ContentFile(text.encode("utf-8"), name=filename),
+        file=ContentFile(payload, name=filename),
         name=filename,
         folder=_document_folder(),
     )
@@ -346,6 +352,90 @@ class ComicRender:
             self.task.set_status(Task.TASK_STATUS_ERROR)
             return None
 
+    def _build_print_pdf(self, render, pages, config, slug):
+        """Lay the pages out on paper. Returns (bytes, pages_written, filename)."""
+        import tempfile
+
+        from scene.print_pdf import DEFAULT_TRIM, PrintLayoutError, build_pdf, fit_report
+
+        trim = str(config.get("trim", DEFAULT_TRIM))
+        per_page = _int_option(config, "per_page", 2, 1, 2, self.task)
+        # 0 = lossless, the default: a print master is not the place to save bytes by guessing.
+        jpeg_quality = _int_option(config, "jpeg_quality", 0, 0, 95, self.task)
+        # Front matter is OPT-IN. Defaulting the title to `render.name` gave every PDF a cover
+        # leaf carrying an internal render name -- front matter nobody asked for, in a book that
+        # may already have its own.
+        front_matter = {
+            "title": config.get("title") or "",
+            "subtitle": config.get("subtitle") or "",
+            "epigraph": config.get("epigraph") or "",
+            "cover": self._cover_path(render, config),
+        }
+
+        # `pages` carries filer IMAGE ROWS, not paths -- the same records the reader lane draws
+        # from. Resolving them here, the way the portable lane does, keeps `print_pdf` a module
+        # about paper rather than about this project's storage.
+        if not _storage_supports_paths(pages):
+            raise ComicRenderError(
+                "The media storage backend does not expose local file paths, which the print "
+                "PDF needs in order to place the art. Use the reader output instead "
+                "(Render.config {\"format\": \"reader\"}).")
+        placed, dropped = [], 0
+        for order, label, image in pages:
+            path = image.path
+            if not path:
+                dropped += 1
+                self.task.log(f"Page {order} ({label}) has no file attached and was left out.")
+                continue
+            placed.append((order, label, path))
+        if not placed:
+            raise ComicRenderError(
+                "None of the pages have a file behind them, so there is nothing to print.")
+        if dropped:
+            self.task.log(f"{dropped} page(s) had no file and are not in the PDF.")
+        pages = placed
+
+        handle, tmp_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(handle)
+        try:
+            try:
+                written, layout = build_pdf(
+                    pages, tmp_path, trim=trim, per_page=per_page,
+                    front_matter=front_matter, task=self.task,
+                    jpeg_quality=jpeg_quality or None)
+            except PrintLayoutError as e:
+                # The trim table is short and the operator cannot see it from the admin, so the
+                # error carries the measurements rather than only the complaint.
+                raise ComicRenderError(f"{e}\n\n{fit_report()}")
+            self.task.log(
+                "Trim %s: page %.0f x %.0f mm, panel %.0f x %.0f mm, %+.0f mm slack, bound by %s."
+                % (layout["trim"], layout["trim_w"], layout["trim_h"],
+                   layout["panel_w"], layout["panel_h"], layout["slack_w"], layout["bound_by"]))
+            with open(tmp_path, "rb") as fh:
+                return fh.read(), written, f"{slug}_print.pdf"
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    def _cover_path(self, render, config):
+        """An explicit cover image, or nothing. Never the first panel by accident."""
+        from filer.models.imagemodels import Image as FilerImage
+
+        cover_id = config.get("cover_image_id")
+        if not cover_id:
+            return None
+        image = FilerImage.objects.filter(pk=cover_id).first()
+        if not image:
+            self.task.log(f"config cover_image_id={cover_id!r} matches no image; no cover drawn.")
+            return None
+        try:
+            return image.file.path
+        except Exception:
+            self.task.log("The cover image has no readable path; no cover drawn.")
+            return None
+
     def _process(self):
         render = self.task.subject
         pages = _page_records(render, self.task)
@@ -359,8 +449,17 @@ class ComicRender:
         # Defaults to the 88 KB reader. `portable` produces ~91.5 MB for a book this size, which
         # is a deliberate choice, never an accident.
         portable = bool(config.get("portable", False))
+        # A book that can be authored and not printed is not finished. The PDF lane takes the
+        # SAME `pages` as the reader, so the two cannot disagree about the order of the book.
+        want_pdf = str(config.get("format", "")).lower() == "pdf"
 
         slug = slugify(render.name) or f"render-{render.id}"
+        if want_pdf:
+            text, written, filename = self._build_print_pdf(render, pages, config, slug)
+            out = _attach(render, filename, text, binary=True)
+            size_mb = len(text) / 1e6
+            self.task.log(f"Rendered {written} page(s) to {filename} ({size_mb:.1f} MB).")
+            return out
         if portable:
             text, written = build_portable_html(
                 render, pages,
