@@ -278,7 +278,15 @@ class UserCreatorMixin:
         user, created = User.objects.get_or_create(username=username, email=email)
         user.set_password(password)
         user.is_staff = True
-        group = Group.objects.get(name='faf')
+        # get_or_create, and the name is configurable. This was Group.objects.get(name='faf'),
+        # a group nothing in the project creates -- no migration, no fixture, no command -- so
+        # inviting a co-author raised Group.DoesNotExist on every fresh instance. That is the
+        # first thing a maintainer does for a collaborator, and it 500s.
+        #
+        # Point INVITED_AUTHOR_GROUP at a group that carries authoring permissions (see the
+        # make_author command) and an invited user can work the moment they log in.
+        group_name = getattr(settings, "INVITED_AUTHOR_GROUP", "faf")
+        group, _ = Group.objects.get_or_create(name=group_name)
         user.groups.add(group)
         user.save()
         # Render HTML and create plain text alternative
@@ -287,7 +295,12 @@ class UserCreatorMixin:
             {'user': user, 
                 'obj': obj,
                 'password': password, 
-                'cta': settings.SITE_URL + f'/admin/scene/story/?id__exact={obj.id}'
+                # SITE_URL is read from the environment and is None when unset, which made
+                # this line a TypeError -- so an invitation could not be sent at all on an
+                # instance that had not defined it, and the failure named the concatenation
+                # rather than the missing setting.
+                'cta': f"{(settings.SITE_URL or '').rstrip('/')}"
+                       f"/admin/scene/story/?id__exact={obj.id}"
             }
         )
         plain_message = strip_tags(html_message)

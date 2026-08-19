@@ -536,7 +536,11 @@ class Agent(models.Model):
             "prompt_token_count": usage.prompt_token_count,
             "candidates_token_count": usage.candidates_token_count,
             "total_token_count": usage.total_token_count,
-            "api_key_id": user.agent_profile.google_api_key.id if user.agent_profile.google_api_key else None,
+            # getattr, not a direct deref: this runs AFTER a paid generation returned, so an
+            # account without an agent_profile raised here and the spend went unrecorded --
+            # money gone, and no TokenUsage row to show for it. The sibling access above
+            # guards the same attribute; this one did not.
+            "api_key_id": _api_key_id(user),
             
             # Fields for advanced features (if available)
         }
@@ -852,6 +856,17 @@ class Agent(models.Model):
         message.set_output(out)
         return out
 
+
+
+def _api_key_id(user):
+    """The API key id recorded against a generation, or None. Never raises.
+
+    A missing agent_profile must not turn a completed, billed generation into an exception:
+    the usage row is the only record that the money was spent.
+    """
+    profile = getattr(user, "agent_profile", None) if user else None
+    key = getattr(profile, "google_api_key", None) if profile else None
+    return key.id if key else None
 
 
 class TokenUsage(models.Model):

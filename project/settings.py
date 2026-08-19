@@ -137,7 +137,7 @@ WSGI_APPLICATION = 'project.wsgi.application'
 
 def agentprofile(request):
     try:
-        return f"/admin/agent/agentprofile/{request.user.story_profile.id}/change/?next=/admin/scene/story/"
+        return f"/admin/agent/agentprofile/{request.user.agent_profile.id}/change/?next=/admin/scene/story/"
     except:
         return "/admin/"
 def token_usage_link(request):
@@ -456,6 +456,11 @@ except ValueError:
     IMAGE_SPEND_BASELINE = 0
 
 
+
+# The group an invited co-author is put into (scene/mixins.py UserCreatorMixin). It is created
+# if it does not exist. Point it at a group that already carries authoring permissions -- the
+# one `manage.py make_author` maintains, for instance -- and an invitee can work on arrival.
+INVITED_AUTHOR_GROUP = os.getenv("INVITED_AUTHOR_GROUP", "faf")
 
 TASK_TYPE_GENERATE_IMAGE = 'generate_image'
 TASK_TYPE_REFINE_IMAGE = 'refine_image'
