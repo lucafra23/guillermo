@@ -1088,6 +1088,19 @@ class Action(AfterSaveActionMixin, models.Model, GetContentsMixin, TaskHolder, M
         else:
             # preset refine is handled in the mixin
             contents = super().get_contents(generate_self=generate_self, preset=preset)
+            if preset == self.PRESET_COMIC:
+                # The comic lane sends prompt_comic and nothing about who is in the panel, which
+                # is why characters drift over a long book. Opt-in, and empty by default, so the
+                # prompt an existing deployment sends does not change underneath it.
+                #
+                # BEFORE the panel's own words, not after. Later parts carry more weight here --
+                # Character.get_contents says so in as many words ("last so it is more
+                # important") -- and a standing description that outranks the panel in front of
+                # it is how a panel rewritten to ask for three men keeps returning the creature
+                # the description still mentions. The panel is the specific instruction; it goes
+                # last and it wins.
+                from .character_locks import contents_for
+                contents[0:0] = contents_for(self)
             if preset != self.PRESET_COMIC and preset != self.PRESET_REFINE:
                 if self.consistent_with:
                     contents.extend(["Maximise consistency, preserve character features and objects to the following image", self.consistent_with.image])
