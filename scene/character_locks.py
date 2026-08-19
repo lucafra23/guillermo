@@ -22,6 +22,23 @@ leaves the prompt byte-identical.
 
 `text` sends the canonical description. `text+image` also attaches the character's reference
 plate, which is stronger and costs more per call.
+
+TWO THINGS TO KNOW BEFORE TURNING ON `text+image`
+
+1. THE PICTURE WINS. When the reference plate and the description disagree, the plate decides and
+   the text reads as decoration. Measured on a production book: a sheet drawing an earring in
+   BOTH ears, against six text statements saying one, in the left ear only, produced 2 rolls with
+   two hoops and 2 with none out of 4 -- a 50% failure rate on a feature the author had named,
+   paid for per roll. `text+image` is the stronger setting only while the two AGREE; once they
+   drift it silently makes the description irrelevant. Change one, change the other.
+
+2. ONE DESCRIPTION IS ONE APPEARANCE. `Character.prompt` is a single string, so a character who
+   changes across the book -- a rebrand, a haircut, aging between chapters -- cannot be expressed
+   here, and every panel receives the same description wherever it sits in the story. The same
+   production book carries THREE appearance epochs for one character and appends the right one by
+   hand per panel, precisely because a single lock silently falls back to the earliest look.
+   Scoping a description to a range of scenes needs a model of its own; this does not pretend to
+   have one.
 """
 import logging
 
