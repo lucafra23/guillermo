@@ -336,6 +336,17 @@ class NudgeAdmin(AdminActionsMixin, ModelAdmin):
         })
     )
 
+
+# Panels are ordered by `order` alone, and nothing makes that unique: measured on a real book,
+# 604 panels share only 530 distinct (scene, order) pairs -- 61 groups covering 135 panels. Ties
+# have no defined order, so the same changelist can come back in a different sequence between
+# requests and an author reads a different book than the one they just arranged. `id` is a
+# tie-break that never changes, so equal `order` values at least stay put.
+#
+# This fixes what the ADMIN shows. The model's own Meta.ordering has the same gap and fixing it
+# there needs a migration; see the PR for why that is deliberately not in here.
+PANEL_ORDERING = ('order', 'id')
+
 @admin.register(Action)
 class ActionAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHistoryAdmin, AjaxSectionAdminMixin, AdminActionsMixin, PromptPreviewMixin, StoryFilterMixin, AjaxTaskModelAdmin):
     ajax_shift_fields = ['prompt', 'prompt_refine']    
@@ -347,7 +358,8 @@ class ActionAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHist
     hide_ordering_field = True
     list_display_links = ('get_name',)
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
-    search_fields = ['get_name']
+    ordering = PANEL_ORDERING
+    search_fields = ['name', 'prompt', 'prompt_comic', 'text']
     actions = ['clone', 'generate_missing_images', 'default_generate_image', 'default_refine_image', 'revert_to_previous_image']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
@@ -359,7 +371,8 @@ class VideoActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_filter = ["scene__story", "scene", "id"]
     list_display_links = ('name',)
     list_refresh = ['video_player']
-    search_fields = ['name']
+    ordering = PANEL_ORDERING
+    search_fields = ['name', 'prompt', 'text']
     actions = ['generate_video', 'generate_video_first_last', 'generate_omni_video']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
@@ -404,7 +417,8 @@ class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_filter = ["scene__story", "scene", "id"]
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
-    search_fields = ['name', 'text']
+    ordering = PANEL_ORDERING
+    search_fields = ['name', 'text', 'prompt_comic', 'prompt']
     actions = ['letter_action', 'suggest_placement', 'generate_comic', 'comic_to_video',
                'bulk_edit_text']
     list_sections = [MessageHistorySection]
@@ -539,7 +553,8 @@ class VoiceActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_display_links = ('name',)
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
     list_refresh = ['voice_player']
-    search_fields = ['name']
+    ordering = PANEL_ORDERING
+    search_fields = ['name', 'prompt_voice', 'text']
     actions = ['generate_voice']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
@@ -550,7 +565,8 @@ class ActionOrganizerAdmin(AjaxSectionAdminMixin, AdminActionsMixin, PromptPrevi
     list_display = ('id', 'name', 'items', 'pic', 'scene', 'is_intro', 'order')
     list_editable = ['name', 'scene', 'is_intro', 'order']
     list_filter = ["scene__story", "scene"]
-    search_fields = ['name']
+    ordering = PANEL_ORDERING
+    search_fields = ['name', 'prompt', 'prompt_comic', 'text']
 
 @admin.register(SceneOrganizer)
 class SceneOrganizerAdmin(AjaxSectionAdminMixin, AdminActionsMixin, AdminLinker, StoryFilterMixin, ModelAdmin):
