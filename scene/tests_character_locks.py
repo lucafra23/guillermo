@@ -141,3 +141,21 @@ class GetContentsIntegrationTests(TestCase):
         with override_settings(COMIC_CHARACTER_CONTEXT="off"):
             after = panel.get_contents(generate_self=True, preset=Action.PRESET_IMAGE)
         self.assertEqual([str(p) for p in before], [str(p) for p in after])
+
+    @override_settings(COMIC_CHARACTER_CONTEXT="text")
+    def test_the_panels_own_words_come_last_and_therefore_win(self):
+        """A standing description must not outrank the panel in front of it.
+
+        Later parts weigh more (Character.get_contents: "last so it is more important"). If the
+        cast description trails the panel's prompt, a panel rewritten to ask for something the
+        description contradicts keeps returning the description's version -- measured in
+        production as a panel asking for three men and receiving a lizard, because the standing
+        character text still said lizard and outranked it.
+        """
+        panel = self._panel()
+        contents = [str(p) for p in panel.get_contents(generate_self=True,
+                                                       preset=Action.PRESET_COMIC)]
+        described = next(i for i, p in enumerate(contents) if "cropped silver hair" in p)
+        own_words = next(i for i, p in enumerate(contents) if "she opens the bag" in p)
+        self.assertLess(described, own_words,
+                        "the cast description outranks the panel's own instruction")
