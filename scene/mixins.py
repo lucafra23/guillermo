@@ -26,14 +26,14 @@ ELEMENT_FIELDSETS = (
         }),
         ("Settings", {
             "classes": ["tab"],
-            "fields": ["image","prompt_refine", "story" ],
+            "fields": ["image", "pic_previous", "prompt_refine", "story" ],
         }),
     )
 
 ACTION_FIELDSETS = (
         ("Composition", {
             "classes": ["tab"],
-            "fields": ["name", "scene", "prompt","order", "actor", "props", "cast", "background", "consistent_with",  "image"],
+            "fields": ["name", "scene", "prompt","order", "actor", "props", "cast", "background", "consistent_with",  "image", "pic_previous"],
         }),
         ("Video", {
             "classes": ["tab"],
@@ -75,6 +75,30 @@ class ModelDisplayMixin:
             return format_html('<a href="{}" download >{}</a>', video.url, _("Download"))
         return _("No Video")
     video_download.short_description = _("Video Download")
+
+    def pic_previous(self):
+        """The plate this one replaced, drawn plainly and read-only.
+
+        `previous_image` exists so a paid generation can be undone, and until now it was visible
+        nowhere: the only way to see what a re-roll replaced was to revert, look, and revert
+        back -- on a field that is `editable=False`, using an action that writes. Showing it
+        beside the current plate makes "is the new one actually better?" answerable by looking,
+        which is the moment it is cheapest to answer.
+
+        Deliberately NOT `_render_image_with_menu`: that markup carries the data attributes the
+        image menu binds write actions to, and this field is not the author's to set.
+        """
+        image = getattr(self, 'previous_image', None)
+        url = image.url if image and hasattr(image, 'url') else ""
+        if not url:
+            return _("No previous plate")
+        return format_html(
+            '<a href="{0}" target="_blank" rel="noopener" title="{1}">'
+            '<img src="{0}" style="max-height: {2}px;" alt="{1}" '
+            'class="rounded-md border border-gray-200 dark:border-gray-700 shadow-sm '
+            'max-w-full h-auto block opacity-90" /></a>',
+            url, _("The plate this one replaced"), self.MAX_IMAGE_HEIGHT)
+    pic_previous.short_description = _("Previous plate")
 
     def pic(self):
         return self._render_image_with_menu('image', _("Image"))

@@ -11,7 +11,7 @@ plainly than a real model with a filer row behind it would.
 """
 import inspect
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from agent.models import GetContentsMixin
 
@@ -105,3 +105,68 @@ class RefineImageTests(SimpleTestCase):
 
         self.assertIs(probe.image, approved, "save=False must not swap the plate")
         self.assertFalse(probe.saved)
+
+
+class PreviousPlateIsVisibleTests(TestCase):
+    """The plate a generation replaced has to be lookable-at, not only revertible-to.
+
+    `previous_image` backs "Revert to previous plate", and was rendered nowhere: the only way to
+    see what a re-roll replaced was to revert, look, and revert back -- writing twice to answer a
+    question about a picture. The standing rule in the book this serves is to diff a new face
+    against one already approved BEFORE arming it; that rule needs the old face on screen.
+    """
+
+    def _plate(self, name):
+        """A filer row with a real file behind it: filer's .url is '' without one."""
+        import os
+
+        from django.conf import settings
+        from filer.models.imagemodels import Image as FilerImage
+        from PIL import Image as PILImage
+
+        rel = f"plates/{name}.png"
+        absolute = os.path.join(settings.MEDIA_ROOT, rel)
+        os.makedirs(os.path.dirname(absolute), exist_ok=True)
+        PILImage.new("RGB", (8, 8), (1, 2, 3)).save(absolute)
+        return FilerImage.objects.create(original_filename=f"{name}.png", file=rel, name=name)
+
+    def _panel(self):
+        from scene.models import Action, Scene, Story
+        story = Story.objects.create(name="Book")
+        scene = Scene.objects.create(name="M00", story=story, order=0)
+        panel = Action.objects.create(name="p", scene=scene, order=0)
+        return panel, self._plate("old"), self._plate("new")
+
+    def test_a_panel_with_no_history_says_so_plainly(self):
+        panel, _old, _new = self._panel()
+        self.assertIn("No previous plate", str(panel.pic_previous()))
+
+    def test_the_replaced_plate_is_rendered_after_a_generation(self):
+        panel, old, new = self._panel()
+        panel.image = old
+        panel.save()
+        panel.set_image_keeping_previous(new)
+        panel.refresh_from_db()
+        markup = str(panel.pic_previous())
+        self.assertIn("<img", markup)
+        self.assertIn(old.url, markup)
+
+    def test_it_carries_no_write_affordance(self):
+        """previous_image is editable=False; the image menu must not bind to it."""
+        panel, old, new = self._panel()
+        panel.image = old
+        panel.save()
+        panel.set_image_keeping_previous(new)
+        markup = str(panel.refresh_from_db() or panel.pic_previous())
+        self.assertNotIn("image-menu-container", markup)
+        self.assertNotIn('data-field="previous_image"', markup)
+
+    def test_it_is_on_the_panel_change_form(self):
+        from scene.mixins import ACTION_FIELDSETS
+        fields = [f for _label, opts in ACTION_FIELDSETS for f in opts["fields"]]
+        self.assertIn("pic_previous", fields)
+
+    def test_it_is_on_the_character_and_prop_change_form(self):
+        from scene.mixins import ELEMENT_FIELDSETS
+        fields = [f for _label, opts in ELEMENT_FIELDSETS for f in opts["fields"]]
+        self.assertIn("pic_previous", fields)
