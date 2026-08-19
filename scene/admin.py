@@ -2,7 +2,7 @@ import io
 import os
 import zipfile
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from httpcore import request
 from unfold.admin import ModelAdmin
 from django.urls import path
@@ -17,7 +17,7 @@ from agent.sections import AjaxSectionAdminMixin, MessageHistorySection
 from django.conf import settings
 from task.models import Task
 from unfold.admin import StackedInline
-from .models import ActionOrganizer, Character, Scene, Preset, Action, Background, SceneOrganizer, StoryGroup, Style, Prop, ComicAction, RenderItem, VideoAction, Render, Story, StoryProfile, Voice, VoiceAction, Author, Nudge, ContactRequest, WorkShop, Sync, SyncItem
+from .models import Feedback, FeedbackBatch, ActionOrganizer, Character, Scene, Preset, Action, Background, SceneOrganizer, StoryGroup, Style, Prop, ComicAction, RenderItem, VideoAction, Render, Story, StoryProfile, Voice, VoiceAction, Author, Nudge, ContactRequest, WorkShop, Sync, SyncItem
 from .admin_utils import AdminLinker
 from agent.admin_utils import AjaxTaskModelAdmin
 from django.utils.translation import gettext_lazy as _
@@ -71,6 +71,21 @@ class PromptPreviewSection(TemplateSection):
             "instance": instance,
             "request": request,
         }
+class FeedbackInline(admin.TabularInline):
+    """The feedback ON this panel, on the panel's own page.
+
+    This is the whole point of keeping it in the app rather than a document: the words that
+    asked for a change are in front of you while you make it, instead of in a file nobody has
+    open. Filed feedback that nobody sees is only a slower way of losing it.
+    """
+    model = Feedback
+    extra = 0
+    fields = ("kind", "work", "ask", "status", "note", "cost")
+    classes = ["collapse"]
+    verbose_name = "feedback"
+    verbose_name_plural = "feedback on this panel"
+
+
 @admin.register(Style)
 class StyleAdmin(PromptMarkdownMixin, AdminActionsMixin, ModelAdmin):
     list_display = ('id','name', 'prompt')
@@ -312,6 +327,7 @@ class ActionAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHist
     hide_ordering_field = True
     list_display_links = ('get_name',)
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
+    inlines = [FeedbackInline]
     search_fields = ['get_name']
     actions = ['clone', 'default_generate_image', 'default_refine_image']
     fieldsets = ACTION_FIELDSETS
@@ -338,6 +354,7 @@ class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_filter = ["scene__story", "scene", "id"]
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
+    inlines = [FeedbackInline]
     search_fields = ['name']
     actions = ['generate_comic', 'comic_to_video']
     list_sections = [MessageHistorySection]
@@ -434,3 +451,60 @@ class SyncItemAdmin(AjaxSectionAdminMixin, AjaxTaskModelAdmin):
         for obj in queryset:
             task_type = settings.TASK_TYPE_SYNC_EXPORT if obj.type == obj.TYPE_EXPORT else settings.TASK_TYPE_SYNC_IMPORT
             Task.createTaskIfQueueEnabled(obj, task_type, owner=request.user)
+
+
+
+@admin.register(FeedbackBatch)
+class FeedbackBatchAdmin(ModelAdmin):
+    list_display = ("__str__", "story", "source", "received", "item_count", "open_count")
+    list_filter = ("source", "story")
+    search_fields = ("label", "verbatim")
+    ordering = ("-received",)
+
+    @admin.display(description="items")
+    def item_count(self, obj):
+        return obj.items.count()
+
+    @admin.display(description="still open")
+    def open_count(self, obj):
+        return obj.items.filter(status__in=Feedback.OPEN_STATUSES).count()
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(ModelAdmin):
+    list_display = ("ref", "kind", "work", "where", "short_ask", "status", "cost")
+    list_filter = ("status", "kind", "work", "source", "story", "scene")
+    list_editable = ("status",)
+    search_fields = ("ref", "ask", "note")
+    autocomplete_fields = ("action", "scene", "story", "batch", "superseded_by")
+    ordering = ("status", "-created")
+    actions = ("mark_verified", "mark_moot")
+
+    @admin.display(description="about")
+    def where(self, obj):
+        if obj.action:
+            return f"{obj.action.scene.name if obj.action.scene else ''} · {obj.action.name}"
+        if obj.scene:
+            return obj.scene.name
+        return obj.story.name if obj.story else "—"
+
+    @admin.display(description="the ask")
+    def short_ask(self, obj):
+        text = " ".join((obj.ask or "").split())
+        return text[:90] + ("…" if len(text) > 90 else "")
+
+    @admin.action(description="Mark verified on the page")
+    def mark_verified(self, request, queryset):
+        """DONE and VERIFIED are different claims.
+
+        Rows were ticked done with the defect still visible, because fixing the cause and
+        looking at the result are two acts and only one of them was being recorded.
+        """
+        updated = queryset.update(status=Feedback.STATUS_VERIFIED)
+        self.message_user(request, f"{updated} item(s) marked verified on the page.",
+                          level=messages.SUCCESS)
+
+    @admin.action(description="Mark moot")
+    def mark_moot(self, request, queryset):
+        updated = queryset.update(status=Feedback.STATUS_MOOT)
+        self.message_user(request, f"{updated} item(s) marked moot.", level=messages.SUCCESS)

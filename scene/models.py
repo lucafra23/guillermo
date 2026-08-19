@@ -1109,3 +1109,153 @@ class ContactRequest(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.email})"
+
+class FeedbackBatch(models.Model):
+    """One message exactly as it arrived, before anyone acted on it.
+
+    Kept verbatim and separately from the items filed out of it, because three of the author's
+    messages on the book this serves were quoted in worked rows and existed nowhere else -- the
+    quote is a paraphrase by the time it reaches a row, and there is nothing left to check it
+    against. A batch is the record that the words were said; the rows are the record of what was
+    done about them.
+    """
+    SOURCE_AUTHOR = "author"
+    SOURCE_AGENT = "agent"
+    SOURCE_AUDIT = "audit"
+    SOURCE_CHOICES = [
+        (SOURCE_AUTHOR, _("The author")),
+        (SOURCE_AGENT, _("An agent or tool")),
+        (SOURCE_AUDIT, _("An audit or review")),
+    ]
+
+    story = models.ForeignKey('Story', verbose_name=_("story"), related_name='feedback_batches',
+                              on_delete=models.CASCADE, null=True, blank=True)
+    label = models.CharField(_("label"), max_length=100, blank=True,
+                             help_text=_("What you call this batch, e.g. the date or 'batch AW'."))
+    source = models.CharField(_("source"), max_length=20, choices=SOURCE_CHOICES,
+                              default=SOURCE_AUTHOR)
+    received = models.DateTimeField(_("received"), auto_now_add=True)
+    verbatim = models.TextField(_("verbatim"),
+                                help_text=_("Paste it exactly as received. Do not tidy it."))
+
+    class Meta:
+        verbose_name = _("Feedback batch")
+        verbose_name_plural = _("Feedback batches")
+        ordering = ['-received', '-id']
+
+    def __str__(self):
+        return self.label or f"{self.get_source_display()} {self.received:%Y-%m-%d}"
+
+
+class Feedback(models.Model):
+    """One ask, one approval, or one standing rule -- and what happened to it.
+
+    Every field here answers a way this went wrong when it lived in prose:
+
+    - `verbatim` and `batch`: feedback that was never filed was simply lost, and raised again
+      two days later.
+    - `status` distinguishes DONE from VERIFIED: rows were ticked done with the defect still on
+      the page, because "the cause is fixed" and "the picture is right" are different claims.
+    - `PARTIAL`: one sentence carrying two asks got half-applied, and nothing recorded the half.
+    - `kind=APPROVAL`: approvals were not artefacts, only complaints were, so an approved panel
+      was cut the next day by work that could not see the approval.
+    - `kind=RULE`: a standing ruling had nowhere to live and was re-learned each time.
+    - `source`: an agent's finding is not the author's instruction, and three of five in one
+      report were about panels that had already been cut.
+    """
+    KIND_ASK = "ask"
+    KIND_APPROVAL = "approval"
+    KIND_RULE = "rule"
+    KIND_QUESTION = "question"
+    KIND_CHOICES = [
+        (KIND_ASK, _("Ask")),
+        (KIND_APPROVAL, _("Approval")),
+        (KIND_RULE, _("Standing rule")),
+        (KIND_QUESTION, _("Question")),
+    ]
+
+    STATUS_OPEN = "open"
+    STATUS_PARTIAL = "partial"
+    STATUS_DONE = "done"
+    STATUS_VERIFIED = "verified"
+    STATUS_MOOT = "moot"
+    STATUS_SUPERSEDED = "superseded"
+    STATUS_CHOICES = [
+        (STATUS_OPEN, _("Open")),
+        (STATUS_PARTIAL, _("Partly done")),
+        (STATUS_DONE, _("Done, not looked at")),
+        (STATUS_VERIFIED, _("Verified on the page")),
+        (STATUS_MOOT, _("Moot")),
+        (STATUS_SUPERSEDED, _("Superseded")),
+    ]
+    OPEN_STATUSES = (STATUS_OPEN, STATUS_PARTIAL, STATUS_DONE)
+
+    WORK_CHOICES = [
+        ("text", _("Words on the page")),
+        ("art", _("The drawing")),
+        ("letter", _("Lettering placement")),
+        ("order", _("Reading order")),
+        ("add", _("Add a panel")),
+        ("cut", _("Cut a panel")),
+        ("move", _("Move a panel")),
+        ("build", _("Build or tooling")),
+        ("other", _("Other")),
+    ]
+
+    batch = models.ForeignKey(FeedbackBatch, verbose_name=_("batch"), related_name='items',
+                              on_delete=models.SET_NULL, null=True, blank=True)
+    story = models.ForeignKey('Story', verbose_name=_("story"), related_name='feedback',
+                              on_delete=models.CASCADE, null=True, blank=True)
+    scene = models.ForeignKey('Scene', verbose_name=_("scene"), related_name='feedback',
+                              on_delete=models.SET_NULL, null=True, blank=True)
+    action = models.ForeignKey('Action', verbose_name=_("panel"), related_name='feedback',
+                               on_delete=models.SET_NULL, null=True, blank=True)
+
+    ref = models.CharField(_("reference"), max_length=50, blank=True,
+                           help_text=_("Your own id for it, if you use one."))
+    kind = models.CharField(_("kind"), max_length=20, choices=KIND_CHOICES, default=KIND_ASK)
+    work = models.CharField(_("work"), max_length=20, choices=WORK_CHOICES, default="other")
+    source = models.CharField(_("source"), max_length=20,
+                              choices=FeedbackBatch.SOURCE_CHOICES,
+                              default=FeedbackBatch.SOURCE_AUTHOR)
+
+    ask = models.TextField(_("the ask"), help_text=_("Their words, not a summary of them."))
+    status = models.CharField(_("status"), max_length=20, choices=STATUS_CHOICES,
+                              default=STATUS_OPEN)
+    note = models.TextField(_("note"), blank=True,
+                            help_text=_("What was done, and what is still not done."))
+    cost = models.DecimalField(_("cost"), max_digits=9, decimal_places=3, null=True, blank=True)
+    superseded_by = models.ForeignKey('self', verbose_name=_("superseded by"),
+                                      related_name='supersedes', on_delete=models.SET_NULL,
+                                      null=True, blank=True)
+
+    created = models.DateTimeField(_("created"), auto_now_add=True)
+    modified = models.DateTimeField(_("modified"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("Feedback")
+        verbose_name_plural = _("Feedback")
+        ordering = ['status', '-created', '-id']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['kind']),
+        ]
+
+    def __str__(self):
+        who = self.ref or self.get_kind_display()
+        where = self.action.name if self.action else (self.scene.name if self.scene else "")
+        head = (self.ask or "").strip().splitlines()[0] if self.ask else ""
+        return f"{who} {where}: {head[:60]}".strip()
+
+    def save(self, *args, **kwargs):
+        # Fill the wider scopes from the narrower one, so filing against a panel is enough and
+        # a row can still be found when someone looks at the scene or the story.
+        if self.action_id and not self.scene_id:
+            self.scene = self.action.scene
+        if self.scene_id and not self.story_id:
+            self.story = self.scene.story
+        super().save(*args, **kwargs)
+
+    @property
+    def is_open(self):
+        return self.status in self.OPEN_STATUSES
