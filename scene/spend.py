@@ -9,6 +9,10 @@ It is OFF unless IMAGE_SPEND_CAP is set, because a cap is a budget and this proj
 know anyone's. When it IS set, every path below fails CLOSED: an unreadable ledger, an
 unpriceable generation, or a cap that cannot be evaluated all refuse the spend rather than
 allowing it. A cap that cannot be read is not a cap that passed.
+
+What counts as spent is deliberately wider than what has been billed. Generation is queued by
+default, and the ledger only learns about a call when it returns, so a cap reading completed
+rows alone approves an unbounded burst before the first row lands. Queued paid work counts too.
 """
 import logging
 
@@ -24,17 +28,57 @@ def _conf(name, default):
 def images_generated():
     """Paid image generations recorded in the ledger, or None if that cannot be read.
 
+    Includes rows whose agent has since been deleted: see the comment below on why those are
+    counted rather than skipped.
+
     TokenUsage is written by Agent.save_usage on every returned generation, so counting its
     image rows counts generations that actually completed -- which is what was billed. A
     refusal that never produced a response writes no row and is not counted, correctly.
     """
     try:
         from agent.models import Agent, TokenUsage
-        return TokenUsage.objects.filter(agent__output_type=Agent.OUTPUT_TYPE_IMAGE).count()
+        images = TokenUsage.objects.filter(agent__output_type=Agent.OUTPUT_TYPE_IMAGE).count()
+        # TokenUsage.agent is SET_NULL, so deleting an Agent detaches its history and the type
+        # of those rows becomes unknowable. Counting them keeps the cap conservative: for a
+        # guard on money, over-reading the past and refusing early is the safe direction, and
+        # the baseline setting is how an operator moves past history they have accepted.
+        orphans = TokenUsage.objects.filter(agent__isnull=True).count()
+        return images + orphans
     except Exception:
         # Never re-raised: this runs on the path that spends money, and an exception here
         # must not become the reason a generation proceeds unchecked.
         logger.warning("Could not read the image ledger for the spend cap", exc_info=True)
+        return None
+
+
+def images_in_flight():
+    """Paid image work that has been APPROVED but not yet billed, or None if unreadable.
+
+    The ledger only learns about a generation when it comes back: save_usage writes its row
+    from the response. But USE_TASK_QUEUE is on by default, so the admin hands work to Celery
+    and returns immediately, and a burst of approvals is invisible to a cap that reads only
+    completed rows. Measured before this existed: with a $1 cap and a $0.10 rate, 200
+    consecutive checks all passed while 200 generations sat queued -- $20 approved against a
+    $1 budget, the cap never firing once.
+
+    Counting queued work makes the cap bound what has been COMMITTED rather than what has
+    already been paid, which is the only version of the number that can still prevent anything.
+    """
+    try:
+        from django.conf import settings as dj_settings
+        from task.models import Task
+
+        paid = [t for t in (getattr(dj_settings, "TASK_TYPE_GENERATE_IMAGE", None),
+                            getattr(dj_settings, "TASK_TYPE_REFINE_IMAGE", None),
+                            getattr(dj_settings, "TASK_TYPE_GENERATE_COMIC", None)) if t]
+        if not paid:
+            return 0
+        unfinished = [Task.TASK_STATUS_STARTED, Task.TASK_STATUS_PENDING,
+                      Task.TASK_STATUS_HOLDING, Task.TASK_STATUS_SCHEDULED,
+                      Task.TASK_STATUS_RETRY]
+        return Task.objects.filter(task_type__in=paid, status__in=unfinished).count()
+    except Exception:
+        logger.warning("Could not read queued generation tasks for the spend cap", exc_info=True)
         return None
 
 
@@ -49,11 +93,16 @@ def new_spend():
     count = images_generated()
     if count is None:
         return None
+    queued = images_in_flight()
+    if queued is None:
+        return None
     rate = float(_conf("IMAGE_GENERATION_COST", 0) or 0)
     if rate <= 0:
         return None
     baseline = int(_conf("IMAGE_SPEND_BASELINE", 0) or 0)
-    return max(0, count - baseline) * rate
+    # Billed work plus approved-and-queued work. The baseline only offsets history, so it is
+    # subtracted from the billed count alone.
+    return (max(0, count - baseline) + max(0, queued)) * rate
 
 
 def cap_block_reason(n_pending=0):

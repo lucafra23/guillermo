@@ -7,6 +7,7 @@ since it reads as protection while allowing the spend.
 from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase, override_settings
 
 from agent.models import Agent, AgentModel, TokenUsage
@@ -147,3 +148,74 @@ class AdminActionTests(TestCase):
                 mock.patch.object(self.ma, "message_user"):
             self.ma._queue_generate_image(req, self.qs)
         self.assertEqual(queued.call_count, 3)
+
+
+@override_settings(IMAGE_GENERATION_COST=0.10, IMAGE_SPEND_CAP=1.0, USE_TASK_QUEUE=True)
+class QueuedWorkTests(TestCase):
+    """The cap has to bound what has been APPROVED, not only what has come back billed.
+
+    Generation is queued by default, and TokenUsage is written from the response. A cap that
+    reads completed rows alone approves an unbounded burst before the first row lands --
+    measured at 200 consecutive approvals against a $1 cap, the cap never firing.
+    """
+
+    def _queue(self, n, task_type=None, status=None):
+        from django.conf import settings as dj
+        from task.models import Task
+        from scene.models import ComicAction, Scene, Story
+        story = Story.objects.create(name=f"s{n}")
+        scene = Scene.objects.create(name="sc", story=story, order=0)
+        subject = ComicAction.objects.create(name="p", scene=scene, order=0)
+        ct = ContentType.objects.get_for_model(subject)
+        Task.objects.bulk_create([
+            Task(subject_ct=ct, subject_id=subject.pk,
+                 task_type=task_type or dj.TASK_TYPE_GENERATE_IMAGE,
+                 status=Task.TASK_STATUS_PENDING if status is None else status)
+            for _ in range(n)])
+
+    def test_queued_generations_count_against_the_budget(self):
+        self._queue(12)                      # $1.20 approved against a $1.00 cap, none billed yet
+        self.assertIsNotNone(cap_block_reason(1))
+
+    def test_a_burst_cannot_walk_past_the_cap_before_anything_is_billed(self):
+        """The exact reproduction: repeated checks with nothing completing in between."""
+        self._queue(5)                       # $0.50 committed
+        allowed = 0
+        for _ in range(200):
+            if cap_block_reason(1) is None:
+                allowed += 1
+                self._queue(1)               # each approval queues one more
+        self.assertLess(allowed, 10, f"{allowed} approvals against a 10-image budget")
+
+    def test_finished_and_failed_tasks_do_not_count_twice(self):
+        """A completed task is already in the ledger; an errored one bought nothing."""
+        from task.models import Task
+        self._queue(5, status=Task.TASK_STATUS_SUCCESS)
+        self._queue(5, status=Task.TASK_STATUS_ERROR)
+        self.assertIsNone(cap_block_reason(1))
+
+    def test_refine_tasks_count_too(self):
+        from django.conf import settings as dj
+        self._queue(12, task_type=dj.TASK_TYPE_REFINE_IMAGE)
+        self.assertIsNotNone(cap_block_reason(1))
+
+    def test_an_unreadable_task_table_fails_closed(self):
+        with mock.patch("task.models.Task.objects.filter", side_effect=RuntimeError("boom")):
+            self.assertIn("could not be read", cap_block_reason(1))
+
+
+class OrphanedLedgerTests(TestCase):
+    """TokenUsage.agent is SET_NULL: deleting an Agent must not hide what it spent."""
+
+    @override_settings(IMAGE_GENERATION_COST=0.10, IMAGE_SPEND_CAP=1.0)
+    def test_history_survives_deleting_the_agent_that_made_it(self):
+        from agent.models import Agent, AgentModel, TokenUsage
+        model = AgentModel.objects.create(name="m")
+        agent = Agent.objects.create(name="artist", agent_model=model,
+                                     output_type=Agent.OUTPUT_TYPE_IMAGE)
+        TokenUsage.objects.bulk_create([TokenUsage(agent=agent, tokens=1) for _ in range(12)])
+        self.assertIsNotNone(cap_block_reason(1))       # $1.20 against a $1.00 cap
+        agent.delete()
+        self.assertEqual(TokenUsage.objects.filter(agent__isnull=True).count(), 12)
+        self.assertIsNotNone(cap_block_reason(1),
+                             "deleting the agent hid the spend and re-opened the budget")
