@@ -313,7 +313,7 @@ class ActionAdmin(ChangelistScrollToEditedMixin, PromptMarkdownMixin, SimpleHist
     list_display_links = ('get_name',)
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
     search_fields = ['get_name']
-    actions = ['clone', 'default_generate_image', 'default_refine_image']
+    actions = ['clone', 'default_generate_image', 'default_refine_image', 'move_panels', 'renumber_panels']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
 
@@ -325,7 +325,7 @@ class VideoActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_display_links = ('name',)
     list_refresh = ['video_player']
     search_fields = ['name']
-    actions = ['generate_video', 'generate_video_first_last', 'generate_omni_video']
+    actions = ['generate_video', 'generate_video_first_last', 'generate_omni_video', 'move_panels', 'renumber_panels']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
 
@@ -339,7 +339,7 @@ class ComicActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     list_refresh = ['pic_comic']
     list_display_links = ('name',)
     search_fields = ['name']
-    actions = ['generate_comic', 'comic_to_video']
+    actions = ['generate_comic', 'comic_to_video', 'move_panels', 'renumber_panels']
     list_sections = [MessageHistorySection]
 
 
@@ -352,7 +352,7 @@ class VoiceActionAdmin(PromptMarkdownMixin, AjaxSectionAdminMixin, AdminActionsM
     autocomplete_fields = ['actor', 'props', 'cast', 'background', 'consistent_with', 'scene', 'voice']
     list_refresh = ['voice_player']
     search_fields = ['name']
-    actions = ['generate_voice']
+    actions = ['generate_voice', 'move_panels', 'renumber_panels']
     fieldsets = ACTION_FIELDSETS
     list_sections = [MessageHistorySection]
 

@@ -1,0 +1,43 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<h1>Move panels</h1>
+
+<p>These panels move together and keep their relative order:</p>
+<ul>
+  {% for panel in panels %}
+    <li><strong>{{ panel.name }}</strong> &mdash; {{ panel.scene.name }}, position {{ panel.order }}</li>
+  {% endfor %}
+</ul>
+
+<form method="post">{% csrf_token %}
+  {% for panel in queryset %}
+    <input type="hidden" name="_selected_action" value="{{ panel.pk }}">
+  {% endfor %}
+  <input type="hidden" name="action" value="move_panels">
+  <input type="hidden" name="reorder_submit" value="1">
+
+  <p>
+    <label>Put them
+      <select name="where">
+        <option value="before">before</option>
+        <option value="after">after</option>
+      </select>
+    </label>
+    <label>
+      <select name="target">
+        {% for candidate in candidates %}
+          <option value="{{ candidate.pk }}">{{ candidate.scene.name }} &middot; {{ candidate.order }} &middot; {{ candidate.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </p>
+
+  <p class="help">
+    The destination scene is renumbered 0..n afterwards, with no gaps and no two panels
+    sharing a number. Choosing a panel in another scene moves these into that scene.
+  </p>
+
+  <input type="submit" class="default" value="Move">
+  <a href="." class="button cancel-link">Cancel</a>
+</form>
+{% endblock %}

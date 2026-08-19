@@ -1,5 +1,6 @@
 import yaml
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.template.response import TemplateResponse
 from django.utils.html import format_html
 from .schemas import AssetsSchema, BackgroundSchema, CharacterSchema, PropSchema, VoiceSchema
 from django.utils.translation import gettext_lazy as _
@@ -290,6 +291,83 @@ class PromptPreviewMixin:
         return JsonResponse({"content": text})
 
 class AdminActionsMixin:
+
+    @admin.action(description="Move panels before/after another panel")
+    def move_panels(self, request, queryset):
+        """Reorder by naming the neighbour, instead of retyping integers.
+
+        A revision pass is full of "move this before that" -- fourteen of them in one recorded
+        sweep -- and the only way to do it was to work out the numbers by hand for a scene of
+        thirty to forty-seven panels. Renumbering afterwards also repairs ties: on a real book
+        135 panels shared a number with a sibling, so their order was whatever came back first.
+        """
+        from django.db.models import Q
+
+        from scene.reorder import AFTER, BEFORE, ReorderError, move
+
+        panels = list(queryset.select_related("scene").order_by("scene__order", "order", "id"))
+        if not panels:
+            self.message_user(request, "Nothing selected.", level=messages.WARNING)
+            return None
+
+        if request.POST.get("reorder_submit"):
+            target_pk = request.POST.get("target")
+            where = request.POST.get("where") or BEFORE
+            target = self.get_queryset(request).filter(pk=target_pk).first()
+            try:
+                moved, renumbered = move(panels, target, where)
+            except ReorderError as e:
+                self.message_user(request, str(e), level=messages.ERROR)
+                return None
+            self.message_user(
+                request,
+                f"Moved {moved} panel(s) {where} {target.name!r}. "
+                f"Renumbered {renumbered} panel(s) so the scene reads 0..n with no ties.",
+                level=messages.SUCCESS)
+            return None
+
+        # Candidate neighbours: everything in the scenes involved, minus the panels being moved.
+        scene_ids = {p.scene_id for p in panels if p.scene_id}
+        candidates = (self.get_queryset(request)
+                      .filter(Q(scene_id__in=scene_ids))
+                      .exclude(pk__in=[p.pk for p in panels])
+                      .select_related("scene")
+                      .order_by("scene__order", "order", "id"))
+        return TemplateResponse(request, "admin/move_panels.html", {
+            **self.admin_site.each_context(request),
+            "title": "Move panels",
+            "queryset": queryset,
+            "panels": panels,
+            "candidates": candidates,
+            "action_name": "move_panels",
+            "opts": self.model._meta,
+            "media": self.media,
+        })
+
+    @admin.action(description="Renumber panels in this scene (repairs ties)")
+    def renumber_panels(self, request, queryset):
+        """Give every scene touched by the selection a clean 0..n-1 sequence."""
+        from scene.reorder import ReorderError, renumber, ties
+
+        scenes = {p.scene for p in queryset.select_related("scene") if p.scene_id}
+        if not scenes:
+            self.message_user(request, "The selected panels are not in a scene.",
+                              level=messages.WARNING)
+            return None
+        total_ties = sum(len(ties(scene)) for scene in scenes)
+        changed = 0
+        try:
+            for scene in scenes:
+                changed += renumber(scene)
+        except ReorderError as e:
+            self.message_user(request, str(e), level=messages.ERROR)
+            return None
+        self.message_user(
+            request,
+            f"Renumbered {changed} panel(s) across {len(scenes)} scene(s); "
+            f"{total_ties} had been sharing a number with a sibling.",
+            level=messages.SUCCESS)
+        return None
     @admin.action(description="Add to comic video")
     def comic_to_video(self, request, queryset):
         Render = apps.get_model('scene', 'Render')
